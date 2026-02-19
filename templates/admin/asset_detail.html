@@ -71,6 +71,20 @@
             <div>{{ asset.purchase_price_net|currency }}</div>
         </div>
     </div>
+    {% if settings.tax_mode == 'regular' and asset.purchase_tax_treatment and asset.purchase_tax_treatment != 'none' %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Steuerbehandlung (Kauf)</div>
+            <div>{{ tax_treatment_labels.get(asset.purchase_tax_treatment, asset.purchase_tax_treatment) }}
+                {% if asset.purchase_tax_rate %} ({{ asset.purchase_tax_rate }}%){% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Vorsteuer</div>
+            <div>{{ (asset.purchase_tax_amount or 0)|currency }}</div>
+        </div>
+    </div>
+    {% endif %}
     {% if asset.useful_life_months %}
     <div class="form-row mt-16">
         <div>
@@ -143,6 +157,12 @@
         <div class="price-row">
             <span>Verkaufserlös</span>
             <span>{{ disposal_result.disposal_price|currency }}</span>
+        </div>
+        {% endif %}
+        {% if settings.tax_mode == 'regular' and asset.disposal_tax_treatment and asset.disposal_tax_treatment != 'none' %}
+        <div class="price-row">
+            <span>USt auf Verkauf ({{ tax_treatment_labels.get(asset.disposal_tax_treatment, '') }}{% if asset.disposal_tax_rate %} {{ asset.disposal_tax_rate }}%{% endif %})</span>
+            <span>{{ (asset.disposal_tax_amount or 0)|currency }}</span>
         </div>
         {% endif %}
         <div class="price-row total">

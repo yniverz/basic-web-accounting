@@ -109,6 +109,9 @@ class Asset(db.Model):
     purchase_date = db.Column(db.Date, nullable=False)
     purchase_price_gross = db.Column(db.Float, nullable=False)
     purchase_price_net = db.Column(db.Float, nullable=False)  # AfA-Bemessungsgrundlage
+    purchase_tax_treatment = db.Column(db.String(30), default='none')  # Same options as Transaction
+    purchase_tax_rate = db.Column(db.Float, nullable=True)  # Actual tax rate used
+    purchase_tax_amount = db.Column(db.Float, nullable=True)  # Vorsteuer-Betrag
 
     # Depreciation settings
     depreciation_method = db.Column(db.String(20), nullable=False, default='linear')
@@ -124,6 +127,9 @@ class Asset(db.Model):
     disposal_date = db.Column(db.Date, nullable=True)
     disposal_price = db.Column(db.Float, nullable=True)  # Verkaufserlös (netto)
     disposal_price_gross = db.Column(db.Float, nullable=True)  # Verkaufserlös (brutto)
+    disposal_tax_treatment = db.Column(db.String(30), nullable=True)  # Same options as Transaction
+    disposal_tax_rate = db.Column(db.Float, nullable=True)  # Actual tax rate used
+    disposal_tax_amount = db.Column(db.Float, nullable=True)  # USt-Betrag auf Verkauf
     disposal_reason = db.Column(db.String(50), nullable=True)
     # 'sold'         = Verkauft
     # 'scrapped'     = Verschrottet / Entsorgt

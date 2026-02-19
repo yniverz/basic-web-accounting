@@ -158,6 +158,12 @@ def _migrate_schema(db):
         ('site_settings', 'tax_rate_reduced', 'REAL DEFAULT 7.0'),
         ('transactions', 'tax_treatment', "VARCHAR(30) DEFAULT 'none'"),
         ('transactions', 'tax_rate', 'REAL'),
+        ('assets', 'purchase_tax_treatment', "VARCHAR(30) DEFAULT 'none'"),
+        ('assets', 'purchase_tax_rate', 'REAL'),
+        ('assets', 'purchase_tax_amount', 'REAL'),
+        ('assets', 'disposal_tax_treatment', 'VARCHAR(30)'),
+        ('assets', 'disposal_tax_rate', 'REAL'),
+        ('assets', 'disposal_tax_amount', 'REAL'),
     ]
 
     for table, column, col_type in migrations:

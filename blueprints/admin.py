@@ -412,12 +412,40 @@ def assets():
 def asset_new():
     if request.method == 'POST':
         try:
+            settings = SiteSettings.get_settings()
+            tax_treatment = request.form.get('purchase_tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+
+            custom_rate = parse_amount(request.form.get('purchase_custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+            # Handle brutto/netto input mode
+            input_mode = request.form.get('purchase_input_mode', 'gross')
+            if input_mode == 'net':
+                net_val = parse_amount(request.form.get('purchase_price_net'))
+                if effective_rate > 0:
+                    gross_val, tax_val = calculate_tax_from_net(net_val, effective_rate)
+                else:
+                    gross_val = net_val
+                    tax_val = 0.0
+            else:
+                gross_val = parse_amount(request.form.get('purchase_price_gross'))
+                if effective_rate > 0:
+                    net_val, tax_val = calculate_tax(gross_val, effective_rate)
+                else:
+                    net_val = gross_val
+                    tax_val = 0.0
+
             asset = Asset(
                 name=request.form.get('name', '').strip(),
                 description=request.form.get('description', '').strip() or None,
                 purchase_date=parse_date(request.form.get('purchase_date')),
-                purchase_price_gross=parse_amount(request.form.get('purchase_price_gross')),
-                purchase_price_net=parse_amount(request.form.get('purchase_price_net')),
+                purchase_price_gross=gross_val,
+                purchase_price_net=net_val,
+                purchase_tax_treatment=tax_treatment,
+                purchase_tax_rate=effective_rate,
+                purchase_tax_amount=tax_val,
                 depreciation_method=request.form.get('depreciation_method', 'linear'),
                 useful_life_months=request.form.get('useful_life_months', type=int) or None,
                 salvage_value=parse_amount(request.form.get('salvage_value', '0')),
@@ -440,10 +468,13 @@ def asset_new():
             flash(f'Fehler beim Erstellen: {str(e)}', 'error')
 
     dep_cats = DepreciationCategory.query.order_by(DepreciationCategory.sort_order, DepreciationCategory.name).all()
+    settings = SiteSettings.get_settings()
     return render_template('asset_form.html',
                            asset=None,
                            methods=DEPRECIATION_METHODS,
                            depreciation_categories=dep_cats,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            rules=RULES,
                            today=date.today().isoformat())
 
@@ -455,12 +486,15 @@ def asset_detail(id):
     book_value = get_book_value(asset)
     disposal_result = get_disposal_result(asset)
 
+    settings = SiteSettings.get_settings()
     return render_template('asset_detail.html',
                            asset=asset,
                            schedule=schedule,
                            book_value=book_value,
                            disposal_result=disposal_result,
                            methods=DEPRECIATION_METHODS,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            current_year=date.today().year)
 
 
@@ -470,11 +504,39 @@ def asset_edit(id):
 
     if request.method == 'POST':
         try:
+            settings = SiteSettings.get_settings()
+            tax_treatment = request.form.get('purchase_tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+
+            custom_rate = parse_amount(request.form.get('purchase_custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+            # Handle brutto/netto input mode
+            input_mode = request.form.get('purchase_input_mode', 'gross')
+            if input_mode == 'net':
+                net_val = parse_amount(request.form.get('purchase_price_net'))
+                if effective_rate > 0:
+                    gross_val, tax_val = calculate_tax_from_net(net_val, effective_rate)
+                else:
+                    gross_val = net_val
+                    tax_val = 0.0
+            else:
+                gross_val = parse_amount(request.form.get('purchase_price_gross'))
+                if effective_rate > 0:
+                    net_val, tax_val = calculate_tax(gross_val, effective_rate)
+                else:
+                    net_val = gross_val
+                    tax_val = 0.0
+
             asset.name = request.form.get('name', '').strip()
             asset.description = request.form.get('description', '').strip() or None
             asset.purchase_date = parse_date(request.form.get('purchase_date'))
-            asset.purchase_price_gross = parse_amount(request.form.get('purchase_price_gross'))
-            asset.purchase_price_net = parse_amount(request.form.get('purchase_price_net'))
+            asset.purchase_price_gross = gross_val
+            asset.purchase_price_net = net_val
+            asset.purchase_tax_treatment = tax_treatment
+            asset.purchase_tax_rate = effective_rate
+            asset.purchase_tax_amount = tax_val
             asset.depreciation_method = request.form.get('depreciation_method', 'linear')
             asset.useful_life_months = request.form.get('useful_life_months', type=int) or None
             asset.salvage_value = parse_amount(request.form.get('salvage_value', '0'))
@@ -499,10 +561,13 @@ def asset_edit(id):
             flash(f'Fehler beim Aktualisieren: {str(e)}', 'error')
 
     dep_cats = DepreciationCategory.query.order_by(DepreciationCategory.sort_order, DepreciationCategory.name).all()
+    settings = SiteSettings.get_settings()
     return render_template('asset_form.html',
                            asset=asset,
                            methods=DEPRECIATION_METHODS,
                            depreciation_categories=dep_cats,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            rules=RULES,
                            today=date.today().isoformat())
 
@@ -514,9 +579,37 @@ def asset_dispose(id):
 
     if request.method == 'POST':
         try:
+            settings = SiteSettings.get_settings()
+            tax_treatment = request.form.get('disposal_tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+
+            custom_rate = parse_amount(request.form.get('disposal_custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+            # Handle brutto/netto input mode
+            input_mode = request.form.get('disposal_input_mode', 'gross')
+            if input_mode == 'net':
+                net_val = parse_amount(request.form.get('disposal_price', '0'))
+                if effective_rate > 0:
+                    gross_val, tax_val = calculate_tax_from_net(net_val, effective_rate)
+                else:
+                    gross_val = net_val
+                    tax_val = 0.0
+            else:
+                gross_val = parse_amount(request.form.get('disposal_price_gross', '0'))
+                if effective_rate > 0:
+                    net_val, tax_val = calculate_tax(gross_val, effective_rate)
+                else:
+                    net_val = gross_val
+                    tax_val = 0.0
+
             asset.disposal_date = parse_date(request.form.get('disposal_date'))
-            asset.disposal_price_gross = parse_amount(request.form.get('disposal_price_gross', '0'))
-            asset.disposal_price = parse_amount(request.form.get('disposal_price', '0'))
+            asset.disposal_price_gross = gross_val
+            asset.disposal_price = net_val
+            asset.disposal_tax_treatment = tax_treatment
+            asset.disposal_tax_rate = effective_rate
+            asset.disposal_tax_amount = tax_val
             asset.disposal_reason = request.form.get('disposal_reason', 'sold')
 
             db.session.commit()
@@ -526,10 +619,13 @@ def asset_dispose(id):
             flash(f'Fehler: {str(e)}', 'error')
 
     book_value = get_book_value(asset)
+    settings = SiteSettings.get_settings()
     return render_template('asset_dispose.html',
                            asset=asset,
                            book_value=book_value,
                            is_edit=is_edit,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
 
 
@@ -539,6 +635,9 @@ def asset_undispose(id):
     asset.disposal_date = None
     asset.disposal_price = None
     asset.disposal_price_gross = None
+    asset.disposal_tax_treatment = None
+    asset.disposal_tax_rate = None
+    asset.disposal_tax_amount = None
     asset.disposal_reason = None
     db.session.commit()
     flash('Abgang wurde r\u00fcckg\u00e4ngig gemacht.', 'success')
@@ -620,8 +719,6 @@ def report():
             if tax_treatment in ('reverse_charge', 'intra_eu') and t_tax_amount > 0:
                 reverse_charge_vat += t_tax_amount
 
-    vat_payable = vat_collected - vat_paid  # Net VAT payable (or refundable if negative)
-
     total_income_transactions = sum(v['gross'] for v in income_by_category.values())
     total_expenses_transactions = sum(v['gross'] for v in expense_by_category.values())
 
@@ -643,6 +740,20 @@ def report():
             depreciation_by_method[method_label]['amount'] += afa
             depreciation_by_method[method_label]['count'] += 1
             total_depreciation += afa
+
+        # VSt from asset purchases in this year
+        if asset.purchase_date and asset.purchase_date.year == year:
+            p_treatment = asset.purchase_tax_treatment or 'none'
+            p_tax = asset.purchase_tax_amount or 0
+            p_rate = asset.purchase_tax_rate or 0
+            if p_treatment in ('standard', 'reduced', 'custom') and p_tax > 0:
+                vat_paid += p_tax
+                rate_key = f'{p_rate}%'
+                if rate_key not in vat_by_rate:
+                    vat_by_rate[rate_key] = {'ust': 0, 'vst': 0}
+                vat_by_rate[rate_key]['vst'] += p_tax
+            if p_treatment in ('reverse_charge', 'intra_eu') and p_tax > 0:
+                reverse_charge_vat += p_tax
 
         # Disposal gains/losses in this year
         if asset.disposal_date and asset.disposal_date.year == year:
@@ -669,6 +780,19 @@ def report():
                         'book_value': result['book_value_at_disposal'],
                         'sale_price': result['disposal_price'],
                     })
+
+            # USt from asset disposals in this year
+            d_treatment = asset.disposal_tax_treatment or 'none'
+            d_tax = asset.disposal_tax_amount or 0
+            d_rate = asset.disposal_tax_rate or 0
+            if d_treatment in ('standard', 'reduced', 'custom') and d_tax > 0:
+                vat_collected += d_tax
+                rate_key = f'{d_rate}%'
+                if rate_key not in vat_by_rate:
+                    vat_by_rate[rate_key] = {'ust': 0, 'vst': 0}
+                vat_by_rate[rate_key]['ust'] += d_tax
+
+    vat_payable = vat_collected - vat_paid  # Net VAT payable (or refundable if negative)
 
     total_income = total_income_transactions + disposal_gains
     total_expenses = total_expenses_transactions + total_depreciation + disposal_losses
