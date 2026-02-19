@@ -39,6 +39,12 @@
                 <input type="text" id="tax_number" name="tax_number"
                        value="{{ settings.tax_number or '' }}"
                        placeholder="z.B. 12/345/67890">
+                <div class="mt-6">
+                    <label for="vat_id">USt-IdNr.</label>
+                    <input type="text" id="vat_id" name="vat_id"
+                           value="{{ settings.vat_id or '' }}"
+                           placeholder="z.B. DE123456789">
+                </div>
             </div>
         </div>
 
@@ -59,9 +65,14 @@
                 </select>
             </div>
             <div class="form-group">
-                <label for="tax_rate">Umsatzsteuersatz (%)</label>
+                <label for="tax_rate">Regelsteuersatz (%)</label>
                 <input type="number" id="tax_rate" name="tax_rate" step="0.1"
                        value="{{ settings.tax_rate }}" style="width: 120px;">
+            </div>
+            <div class="form-group">
+                <label for="tax_rate_reduced">Ermäßigter Satz (%)</label>
+                <input type="number" id="tax_rate_reduced" name="tax_rate_reduced" step="0.1"
+                       value="{{ settings.tax_rate_reduced or 7.0 }}" style="width: 120px;">
             </div>
         </div>
 

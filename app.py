@@ -154,6 +154,10 @@ def _migrate_schema(db):
     migrations = [
         ('assets', 'depreciation_category_id', 'INTEGER'),
         ('assets', 'disposal_price_gross', 'REAL'),
+        ('site_settings', 'vat_id', 'VARCHAR(100)'),
+        ('site_settings', 'tax_rate_reduced', 'REAL DEFAULT 7.0'),
+        ('transactions', 'tax_treatment', "VARCHAR(30) DEFAULT 'none'"),
+        ('transactions', 'tax_rate', 'REAL'),
     ]
 
     for table, column, col_type in migrations:

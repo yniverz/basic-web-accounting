@@ -76,6 +76,17 @@ textarea { resize: vertical; min-height: 80px; }
     color: var(--color-gray-700);
     margin-bottom: 6px;
 }
+label.radio-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 400;
+    cursor: pointer;
+    font-size: 0.95em;
+}
+label.radio-label input[type="radio"] {
+    margin: 0;
+}
 .form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;

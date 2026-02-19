@@ -73,7 +73,12 @@
                     <th>Beschreibung</th>
                     <th>Kategorie</th>
                     <th>Typ</th>
-                    <th style="text-align: right;">Betrag</th>
+                    <th style="text-align: right;">Brutto</th>
+                    {% if site_settings.tax_mode == 'regular' %}
+                    <th style="text-align: right;">Netto</th>
+                    <th style="text-align: right;">USt/VSt</th>
+                    <th>Steuer</th>
+                    {% endif %}
                     <th>Beleg</th>
                     <th>Aktionen</th>
                 </tr>
@@ -97,6 +102,27 @@
                         {% endif %}
                     </td>
                     <td style="text-align: right; white-space: nowrap;">{{ t.amount|currency }}</td>
+                    {% if site_settings.tax_mode == 'regular' %}
+                    <td style="text-align: right; white-space: nowrap;">{{ (t.net_amount or t.amount)|currency }}</td>
+                    <td style="text-align: right; white-space: nowrap;">{{ (t.tax_amount or 0)|currency }}</td>
+                    <td style="white-space: nowrap;">
+                        {% if t.tax_treatment == 'standard' %}
+                        <span class="text-sm">{{ t.tax_rate or site_settings.tax_rate }}%</span>
+                        {% elif t.tax_treatment == 'reduced' %}
+                        <span class="text-sm">{{ t.tax_rate or site_settings.tax_rate_reduced }}% erm.</span>
+                        {% elif t.tax_treatment == 'reverse_charge' %}
+                        <span class="text-sm text-muted">RC §13b</span>
+                        {% elif t.tax_treatment == 'intra_eu' %}
+                        <span class="text-sm text-muted">ig.</span>
+                        {% elif t.tax_treatment == 'tax_free' %}
+                        <span class="text-sm text-muted">stfrei</span>
+                        {% elif t.tax_treatment == 'custom' %}
+                        <span class="text-sm">{{ t.tax_rate }}%</span>
+                        {% else %}
+                        <span class="text-sm text-muted">–</span>
+                        {% endif %}
+                    </td>
+                    {% endif %}
                     <td>
                         {% if t.document_filename %}
                         <a href="{{ url_for('admin.uploaded_file', filename=t.document_filename) }}" target="_blank" class="text-accent text-sm">📎 Beleg</a>

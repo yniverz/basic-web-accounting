@@ -43,6 +43,44 @@ def calculate_tax(gross_amount, tax_rate):
     return round(net, 2), round(tax, 2)
 
 
+def calculate_tax_from_net(net_amount, tax_rate):
+    """Calculate gross amount and tax from net amount."""
+    if tax_rate <= 0:
+        return net_amount, 0.0
+    tax = net_amount * (tax_rate / 100)
+    gross = net_amount + tax
+    return round(gross, 2), round(tax, 2)
+
+
+# Tax treatment labels (German)
+TAX_TREATMENT_LABELS = {
+    'none': 'Keine USt',
+    'standard': 'Regelsteuersatz',
+    'reduced': 'Ermäßigter Satz',
+    'tax_free': 'Steuerfrei (0%)',
+    'reverse_charge': 'Reverse Charge (§13b)',
+    'intra_eu': 'Innergemeinschaftlich',
+    'custom': 'Benutzerdefiniert',
+}
+
+
+def get_tax_rate_for_treatment(treatment, settings, custom_rate=None):
+    """Get the effective tax rate for a given tax treatment."""
+    if treatment == 'standard':
+        return settings.tax_rate
+    elif treatment == 'reduced':
+        return settings.tax_rate_reduced
+    elif treatment == 'custom' and custom_rate is not None:
+        return custom_rate
+    elif treatment in ('reverse_charge', 'intra_eu'):
+        # Reverse charge / intra-EU: tax exists but is shifted (recorded at 0 for seller)
+        # For expenses: you must self-assess and can deduct Vorsteuer
+        return 0.0
+    else:
+        # 'none', 'tax_free'
+        return 0.0
+
+
 def get_year_choices():
     """Return a list of years for filter dropdowns."""
     current_year = date.today().year

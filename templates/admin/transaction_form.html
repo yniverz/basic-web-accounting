@@ -31,12 +31,59 @@
                    placeholder="z.B. Rechnung #123, Büromaterial, etc.">
         </div>
 
+        {% if settings.tax_mode == 'regular' %}
+        <!-- Tax Treatment -->
         <div class="form-row">
             <div class="form-group">
-                <label for="amount">Betrag (Brutto, €)</label>
+                <label for="tax_treatment">Steuerbehandlung</label>
+                <select id="tax_treatment" name="tax_treatment" onchange="updateTaxFields()">
+                    {% for key, label in tax_treatment_labels.items() %}
+                    <option value="{{ key }}"
+                            data-rate="{% if key == 'standard' %}{{ settings.tax_rate }}{% elif key == 'reduced' %}{{ settings.tax_rate_reduced }}{% elif key == 'custom' %}0{% else %}0{% endif %}"
+                            {{ 'selected' if transaction and transaction.tax_treatment == key }}>
+                        {{ label }}{% if key == 'standard' %} ({{ settings.tax_rate }}%){% elif key == 'reduced' %} ({{ settings.tax_rate_reduced }}%){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="custom_rate_group" style="display: none;">
+                <label for="custom_tax_rate">Steuersatz (%)</label>
+                <input type="number" id="custom_tax_rate" name="custom_tax_rate" step="0.1" min="0" max="100"
+                       value="{{ transaction.tax_rate if transaction and transaction.tax_treatment == 'custom' else '' }}"
+                       placeholder="z.B. 5.0" onchange="recalculate()">
+            </div>
+        </div>
+        {% else %}
+        <input type="hidden" name="tax_treatment" value="none">
+        {% endif %}
+
+        <!-- Amount Input Mode -->
+        <div class="form-row">
+            <div class="form-group">
+                <label>Eingabemodus</label>
+                <div class="d-flex gap-10">
+                    <label class="radio-label">
+                        <input type="radio" name="input_mode" value="gross" checked onchange="toggleInputMode()"> Brutto
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="input_mode" value="net" onchange="toggleInputMode()"> Netto
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" id="gross_input_group">
+                <label for="amount">Betrag Brutto (€)</label>
                 <input type="number" id="amount" name="amount" step="0.01" min="0.01"
                        value="{{ transaction.amount if transaction else '' }}" required
-                       placeholder="0,00">
+                       placeholder="0,00" oninput="recalculate()">
+            </div>
+            <div class="form-group" id="net_input_group" style="display: none;">
+                <label for="net_input">Betrag Netto (€)</label>
+                <input type="number" id="net_input" name="net_input" step="0.01" min="0.01"
+                       value="{{ transaction.net_amount if transaction else '' }}"
+                       placeholder="0,00" oninput="recalculate()">
             </div>
             <div class="form-group">
                 <label for="category_id">Kategorie</label>
@@ -52,6 +99,24 @@
                 </select>
             </div>
         </div>
+
+        {% if settings.tax_mode == 'regular' %}
+        <!-- Calculated Tax Summary -->
+        <div class="card" id="tax_summary" style="background: var(--bg-secondary); padding: 12px 16px; margin-bottom: 16px;">
+            <div class="d-flex justify-between text-sm">
+                <span>Netto:</span>
+                <span id="calc_net">–</span>
+            </div>
+            <div class="d-flex justify-between text-sm">
+                <span id="tax_label">USt/VSt (<span id="calc_rate">0</span>%):</span>
+                <span id="calc_tax">–</span>
+            </div>
+            <div class="d-flex justify-between text-sm font-semibold" style="border-top: 1px solid var(--border-color); padding-top: 4px; margin-top: 4px;">
+                <span>Brutto:</span>
+                <span id="calc_gross">–</span>
+            </div>
+        </div>
+        {% endif %}
 
         <div class="form-group">
             <label for="notes">Notizen</label>
@@ -83,6 +148,10 @@
 
 {% block extra_js %}
 <script>
+var standardRate = {{ settings.tax_rate if settings else 19 }};
+var reducedRate = {{ settings.tax_rate_reduced if settings and settings.tax_rate_reduced else 7 }};
+var isRegular = {{ 'true' if settings and settings.tax_mode == 'regular' else 'false' }};
+
 function filterCategories() {
     var type = document.getElementById('type').value;
     var options = document.querySelectorAll('#category_id option[data-type]');
@@ -93,7 +162,81 @@ function filterCategories() {
         }
     });
 }
-// Run on load
+
+function getEffectiveRate() {
+    if (!isRegular) return 0;
+    var treatment = document.getElementById('tax_treatment');
+    if (!treatment) return 0;
+    var val = treatment.value;
+    if (val === 'standard') return standardRate;
+    if (val === 'reduced') return reducedRate;
+    if (val === 'custom') {
+        return parseFloat(document.getElementById('custom_tax_rate').value) || 0;
+    }
+    return 0;
+}
+
+function updateTaxFields() {
+    var treatment = document.getElementById('tax_treatment');
+    if (!treatment) return;
+    var customGroup = document.getElementById('custom_rate_group');
+    if (customGroup) {
+        customGroup.style.display = (treatment.value === 'custom') ? '' : 'none';
+    }
+    recalculate();
+}
+
+function toggleInputMode() {
+    var mode = document.querySelector('input[name="input_mode"]:checked').value;
+    var grossGroup = document.getElementById('gross_input_group');
+    var netGroup = document.getElementById('net_input_group');
+    var amountInput = document.getElementById('amount');
+    var netInput = document.getElementById('net_input');
+
+    if (mode === 'net') {
+        grossGroup.style.display = 'none';
+        netGroup.style.display = '';
+        amountInput.removeAttribute('required');
+        netInput.setAttribute('required', '');
+    } else {
+        grossGroup.style.display = '';
+        netGroup.style.display = 'none';
+        amountInput.setAttribute('required', '');
+        netInput.removeAttribute('required');
+    }
+    recalculate();
+}
+
+function recalculate() {
+    if (!isRegular) return;
+    var rate = getEffectiveRate();
+    var mode = document.querySelector('input[name="input_mode"]:checked').value;
+    var calcNet = document.getElementById('calc_net');
+    var calcTax = document.getElementById('calc_tax');
+    var calcGross = document.getElementById('calc_gross');
+    var calcRate = document.getElementById('calc_rate');
+
+    if (calcRate) calcRate.textContent = rate.toFixed(1);
+
+    var net, gross, tax;
+    if (mode === 'net') {
+        net = parseFloat(document.getElementById('net_input').value) || 0;
+        tax = rate > 0 ? net * (rate / 100) : 0;
+        gross = net + tax;
+    } else {
+        gross = parseFloat(document.getElementById('amount').value) || 0;
+        net = rate > 0 ? gross / (1 + rate / 100) : gross;
+        tax = gross - net;
+    }
+
+    if (calcNet) calcNet.textContent = net.toFixed(2) + ' €';
+    if (calcTax) calcTax.textContent = tax.toFixed(2) + ' €';
+    if (calcGross) calcGross.textContent = gross.toFixed(2) + ' €';
+}
+
+// Init
 filterCategories();
+updateTaxFields();
+recalculate();
 </script>
 {% endblock %}

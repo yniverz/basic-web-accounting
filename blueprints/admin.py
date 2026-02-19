@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory
 from werkzeug.security import generate_password_hash
-from helpers import parse_date, parse_amount, calculate_tax, get_year_choices, get_month_names, format_currency
+from helpers import parse_date, parse_amount, calculate_tax, calculate_tax_from_net, get_year_choices, get_month_names, format_currency, TAX_TREATMENT_LABELS, get_tax_rate_for_treatment
 from depreciation import (
     get_depreciation_schedule, get_depreciation_for_year, get_book_value,
     get_disposal_result, suggest_method, DEPRECIATION_METHODS, USEFUL_LIFE_PRESETS, RULES
@@ -113,18 +113,43 @@ def transaction_new():
                 date=parse_date(request.form.get('date')),
                 type=request.form.get('type', 'expense'),
                 description=request.form.get('description', '').strip(),
-                amount=parse_amount(request.form.get('amount')),
+                amount=0,  # will be set below
                 category_id=request.form.get('category_id', type=int) or None,
                 notes=request.form.get('notes', '').strip() or None,
             )
 
-            # Tax calculation
+            # Tax treatment
             settings = SiteSettings.get_settings()
-            if settings.tax_mode == 'regular' and settings.tax_rate > 0:
-                t.net_amount, t.tax_amount = calculate_tax(t.amount, settings.tax_rate)
+            tax_treatment = request.form.get('tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+            t.tax_treatment = tax_treatment
+
+            # Determine effective tax rate
+            custom_rate = parse_amount(request.form.get('custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+            t.tax_rate = effective_rate
+
+            # Handle brutto/netto input mode
+            input_mode = request.form.get('input_mode', 'gross')
+            if input_mode == 'net':
+                net_input = parse_amount(request.form.get('net_input'))
+                if effective_rate > 0:
+                    gross, tax = calculate_tax_from_net(net_input, effective_rate)
+                    t.amount = gross
+                    t.net_amount = net_input
+                    t.tax_amount = tax
+                else:
+                    t.amount = net_input
+                    t.net_amount = net_input
+                    t.tax_amount = 0.0
             else:
-                t.net_amount = t.amount
-                t.tax_amount = 0.0
+                t.amount = parse_amount(request.form.get('amount'))
+                if effective_rate > 0:
+                    t.net_amount, t.tax_amount = calculate_tax(t.amount, effective_rate)
+                else:
+                    t.net_amount = t.amount
+                    t.tax_amount = 0.0
 
             # File upload
             file = request.files.get('document')
@@ -141,9 +166,12 @@ def transaction_new():
             flash(f'Fehler beim Erstellen: {str(e)}', 'error')
 
     categories = Category.query.order_by(Category.sort_order, Category.name).all()
+    settings = SiteSettings.get_settings()
     return render_template('transaction_form.html',
                            transaction=None,
                            categories=categories,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
 
 
@@ -156,17 +184,41 @@ def transaction_edit(id):
             t.date = parse_date(request.form.get('date'))
             t.type = request.form.get('type', 'expense')
             t.description = request.form.get('description', '').strip()
-            t.amount = parse_amount(request.form.get('amount'))
             t.category_id = request.form.get('category_id', type=int) or None
             t.notes = request.form.get('notes', '').strip() or None
 
-            # Tax calculation
+            # Tax treatment
             settings = SiteSettings.get_settings()
-            if settings.tax_mode == 'regular' and settings.tax_rate > 0:
-                t.net_amount, t.tax_amount = calculate_tax(t.amount, settings.tax_rate)
+            tax_treatment = request.form.get('tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+            t.tax_treatment = tax_treatment
+
+            # Determine effective tax rate
+            custom_rate = parse_amount(request.form.get('custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+            t.tax_rate = effective_rate
+
+            # Handle brutto/netto input mode
+            input_mode = request.form.get('input_mode', 'gross')
+            if input_mode == 'net':
+                net_input = parse_amount(request.form.get('net_input'))
+                if effective_rate > 0:
+                    gross, tax = calculate_tax_from_net(net_input, effective_rate)
+                    t.amount = gross
+                    t.net_amount = net_input
+                    t.tax_amount = tax
+                else:
+                    t.amount = net_input
+                    t.net_amount = net_input
+                    t.tax_amount = 0.0
             else:
-                t.net_amount = t.amount
-                t.tax_amount = 0.0
+                t.amount = parse_amount(request.form.get('amount'))
+                if effective_rate > 0:
+                    t.net_amount, t.tax_amount = calculate_tax(t.amount, effective_rate)
+                else:
+                    t.net_amount = t.amount
+                    t.tax_amount = 0.0
 
             # File upload
             file = request.files.get('document')
@@ -187,9 +239,12 @@ def transaction_edit(id):
             flash(f'Fehler beim Aktualisieren: {str(e)}', 'error')
 
     categories = Category.query.order_by(Category.sort_order, Category.name).all()
+    settings = SiteSettings.get_settings()
     return render_template('transaction_form.html',
                            transaction=t,
                            categories=categories,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
 
 
@@ -517,22 +572,55 @@ def report():
     income_by_category = {}
     expense_by_category = {}
 
+    # VAT tracking
+    vat_collected = 0.0  # USt auf Einnahmen (Umsatzsteuer)
+    vat_paid = 0.0       # VSt auf Ausgaben (Vorsteuer)
+    reverse_charge_vat = 0.0  # Self-assessed USt on reverse charge / intra-EU
+    vat_by_rate = {}     # Detailed breakdown by rate
+
     for t in transactions:
         cat_name = t.category.name if t.category else 'Ohne Kategorie'
+        tax_treatment = t.tax_treatment or 'none'
+        t_tax_amount = t.tax_amount or 0
+        t_tax_rate = t.tax_rate or 0
+        treatment_label = TAX_TREATMENT_LABELS.get(tax_treatment, tax_treatment)
+
         if t.type == 'income':
             if cat_name not in income_by_category:
                 income_by_category[cat_name] = {'gross': 0, 'net': 0, 'tax': 0, 'count': 0}
             income_by_category[cat_name]['gross'] += t.amount
             income_by_category[cat_name]['net'] += (t.net_amount or t.amount)
-            income_by_category[cat_name]['tax'] += (t.tax_amount or 0)
+            income_by_category[cat_name]['tax'] += t_tax_amount
             income_by_category[cat_name]['count'] += 1
+
+            # USt collected
+            if tax_treatment in ('standard', 'reduced', 'custom') and t_tax_amount > 0:
+                vat_collected += t_tax_amount
+                rate_key = f'{t_tax_rate}%'
+                if rate_key not in vat_by_rate:
+                    vat_by_rate[rate_key] = {'ust': 0, 'vst': 0}
+                vat_by_rate[rate_key]['ust'] += t_tax_amount
         else:
             if cat_name not in expense_by_category:
                 expense_by_category[cat_name] = {'gross': 0, 'net': 0, 'tax': 0, 'count': 0}
             expense_by_category[cat_name]['gross'] += t.amount
             expense_by_category[cat_name]['net'] += (t.net_amount or t.amount)
-            expense_by_category[cat_name]['tax'] += (t.tax_amount or 0)
+            expense_by_category[cat_name]['tax'] += t_tax_amount
             expense_by_category[cat_name]['count'] += 1
+
+            # VSt paid (deductible input VAT)
+            if tax_treatment in ('standard', 'reduced', 'custom') and t_tax_amount > 0:
+                vat_paid += t_tax_amount
+                rate_key = f'{t_tax_rate}%'
+                if rate_key not in vat_by_rate:
+                    vat_by_rate[rate_key] = {'ust': 0, 'vst': 0}
+                vat_by_rate[rate_key]['vst'] += t_tax_amount
+
+            # Reverse charge / intra-EU on expenses: self-assess AND deduct
+            if tax_treatment in ('reverse_charge', 'intra_eu') and t_tax_amount > 0:
+                reverse_charge_vat += t_tax_amount
+
+    vat_payable = vat_collected - vat_paid  # Net VAT payable (or refundable if negative)
 
     total_income_transactions = sum(v['gross'] for v in income_by_category.values())
     total_expenses_transactions = sum(v['gross'] for v in expense_by_category.values())
@@ -603,6 +691,11 @@ def report():
                            total_income=total_income,
                            total_expenses=total_expenses,
                            profit=profit,
+                           vat_collected=vat_collected,
+                           vat_paid=vat_paid,
+                           vat_payable=vat_payable,
+                           vat_by_rate=vat_by_rate,
+                           reverse_charge_vat=reverse_charge_vat,
                            settings=settings)
 
 
@@ -622,8 +715,10 @@ def settings():
         settings.contact_lines = request.form.get('contact_lines', '').strip() or None
         settings.bank_lines = request.form.get('bank_lines', '').strip() or None
         settings.tax_number = request.form.get('tax_number', '').strip() or None
+        settings.vat_id = request.form.get('vat_id', '').strip() or None
         settings.tax_mode = request.form.get('tax_mode', 'kleinunternehmer')
         settings.tax_rate = float(request.form.get('tax_rate', 19.0))
+        settings.tax_rate_reduced = float(request.form.get('tax_rate_reduced', 7.0))
         db.session.commit()
         flash('Einstellungen wurden gespeichert.', 'success')
         return redirect(url_for('admin.settings'))
