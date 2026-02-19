@@ -12,6 +12,8 @@ services:
       - AI_API_KEY=
       - AI_MODEL=gpt-4o
       # - AI_BASE_URL=https://your-endpoint.example.com/v1
+      # REST API
+      - API_KEY=
     volumes:
       - app_data:/app/instance
     restart: unless-stopped

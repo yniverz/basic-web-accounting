@@ -128,9 +128,11 @@ def create_app():
     from blueprints.auth import auth_bp
     from blueprints.admin import admin_bp
     from blueprints.ai_chat import ai_bp
+    from blueprints.api import api_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(ai_bp, url_prefix='/admin')
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
 
     # Redirect root to admin (no public pages in this app)
     @app.route('/')
