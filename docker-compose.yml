@@ -4,16 +4,16 @@ services:
     ports:
       - "5001:5001"
     environment:
-      - SECRET_KEY=change-me-to-a-secure-random-string
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=password123
+      - SECRET_KEY=${SECRET_KEY:-change-me-to-a-secure-random-string}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-password123}
       # AI Chat Configuration
-      - AI_PROVIDER=openai
-      - AI_API_KEY=
-      - AI_MODEL=gpt-4o
-      # - AI_BASE_URL=https://your-endpoint.example.com/v1
+      - AI_PROVIDER=${AI_PROVIDER:-openai}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-gpt-4o}
+      - AI_BASE_URL=${AI_BASE_URL:-}
       # REST API
-      - API_KEY=
+      - API_KEY=${API_KEY:-}
     volumes:
       - app_data:/app/instance
     restart: unless-stopped
