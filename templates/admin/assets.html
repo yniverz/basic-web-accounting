@@ -106,6 +106,7 @@
                         {% endif %}
                     </td>
                     <td style="white-space: nowrap;">
+                        <a href="{{ url_for('admin.bundle_detail', bundle_id=bid) }}" class="btn btn-sm btn-outline" onclick="event.stopPropagation()">Details</a>
                         <a href="{{ url_for('admin.bundle_edit', bundle_id=bid) }}" class="btn btn-sm btn-outline" onclick="event.stopPropagation()">Bearbeiten</a>
                         {% if active_count > 0 %}
                         <a href="{{ url_for('admin.bundle_dispose', bundle_id=bid) }}" class="btn btn-sm btn-outline" onclick="event.stopPropagation()">Teilabgang</a>

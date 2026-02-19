@@ -1,0 +1,226 @@
+{% extends "admin/base.html" %}
+{% block title %}📦 {{ base_name }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📦 {{ base_name }}</h1>
+    <div class="d-flex gap-10">
+        <a href="{{ url_for('admin.bundle_edit', bundle_id=bundle_id) }}" class="btn btn-outline">Bearbeiten</a>
+        {% if active_count > 0 %}
+        <a href="{{ url_for('admin.bundle_dispose', bundle_id=bundle_id) }}" class="btn btn-warning">Teilabgang</a>
+        {% endif %}
+        <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
+    </div>
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Anschaffungskosten (Netto)</div>
+        <div class="stat-value">{{ total_net|currency }}</div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Aktueller Buchwert</div>
+        <div class="stat-value">{{ total_book_value|currency }}</div>
+    </div>
+    <div class="stat-card stat-muted">
+        <div class="stat-label">Stückzahl</div>
+        <div class="stat-value text-sm" style="font-size: 1.2em;">
+            {{ items|length }} Stk.
+            {% if active_count < items|length %}
+            <span class="text-muted text-sm">({{ active_count }} aktiv)</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Details Card -->
+<div class="card">
+    <div class="card-header">Stammdaten</div>
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Bezeichnung</div>
+            <div class="font-semibold">{{ base_name }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Beschreibung</div>
+            <div>{{ representative.description or '–' }}</div>
+        </div>
+    </div>
+    <hr class="section-divider">
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Anschaffungsdatum</div>
+            <div>{{ representative.purchase_date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">AfA-Methode</div>
+            <div>{{ methods.get(representative.depreciation_method, representative.depreciation_method) }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Kaufpreis Gesamt Brutto</div>
+            <div>{{ total_gross|currency }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Kaufpreis Gesamt Netto (AfA-Basis)</div>
+            <div>{{ total_net|currency }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Stückpreis Brutto</div>
+            <div>{{ representative.purchase_price_gross|currency }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Stückpreis Netto</div>
+            <div>{{ representative.purchase_price_net|currency }}</div>
+        </div>
+    </div>
+    {% if representative.useful_life_months %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Nutzungsdauer</div>
+            <div>{{ representative.useful_life_months }} Monate ({{ (representative.useful_life_months / 12)|round(1) }} Jahre)</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Erinnerungswert (pro Stück)</div>
+            <div>{{ (representative.salvage_value or 0)|currency }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if representative.depreciation_category %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">AfA-Kategorie</div>
+        <div>{{ representative.depreciation_category.name }}</div>
+    </div>
+    {% endif %}
+    {% if representative.document_filename %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Beleg</div>
+        <a href="{{ url_for('admin.uploaded_file', filename=representative.document_filename) }}" target="_blank" class="text-accent">📎 {{ representative.document_filename }}</a>
+    </div>
+    {% endif %}
+    {% if representative.notes %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Notizen</div>
+        <div>{{ representative.notes }}</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Purchase Account Booking -->
+<div class="card">
+    <div class="card-header">Kontobuchung (Kauf)</div>
+    {% if linked_tx %}
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
+            <div>{{ linked_tx.description }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Konto</div>
+            <div>{{ linked_tx.account.name if linked_tx.account else '–' }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Datum</div>
+            <div>{{ linked_tx.date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Betrag</div>
+            <div>{{ linked_tx.amount|currency }}</div>
+        </div>
+    </div>
+    <div class="mt-16">
+        <form method="POST" action="{{ url_for('admin.bundle_unlink_outflow', bundle_id=bundle_id) }}"
+              onsubmit="return confirm('Verknüpfte Kontobuchung wirklich löschen?')">
+            <button type="submit" class="btn btn-sm btn-outline text-danger">Kontobuchung entfernen</button>
+        </form>
+    </div>
+    {% else %}
+    <p class="text-muted text-sm mb-16">Keine verknüpfte Kaufbuchung vorhanden. Sie können nachträglich einen Abgang vom Konto buchen (erscheint nicht in der EÜR).</p>
+    <form method="POST" action="{{ url_for('admin.bundle_book_outflow', bundle_id=bundle_id) }}" class="d-flex gap-10 align-center">
+        <select name="outflow_account_id" required style="width: auto;">
+            {% for acc in accounts %}
+            <option value="{{ acc.id }}">{{ acc.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary">Abgang buchen ({{ total_gross|currency }})</button>
+    </form>
+    {% endif %}
+</div>
+
+<!-- Disposal Account Bookings -->
+{% if disposal_txs %}
+<div class="card">
+    <div class="card-header">Kontobuchungen (Veräußerung)</div>
+    {% for dtx in disposal_txs %}
+    <div class="form-row {% if not loop.first %}mt-16{% endif %}">
+        <div>
+            <div class="text-muted text-sm mb-4">{{ dtx.description }}</div>
+            <div>{{ dtx.date|date_format }} — {{ dtx.amount|currency }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Konto</div>
+            <div>{{ dtx.account.name if dtx.account else '–' }}</div>
+        </div>
+    </div>
+    {% if not loop.last %}<hr class="section-divider">{% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Items -->
+<div class="card">
+    <div class="card-header">Einzelne Anlagegüter</div>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Bezeichnung</th>
+                    <th style="text-align: right;">Netto (Kauf)</th>
+                    <th style="text-align: right;">Buchwert</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in items %}
+                <tr class="{{ 'text-muted' if a.disposal_date }}">
+                    <td>
+                        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="text-accent">{{ a.name }}</a>
+                    </td>
+                    <td style="text-align: right;">{{ a.purchase_price_net|currency }}</td>
+                    <td style="text-align: right;">{{ a._book_value|currency }}</td>
+                    <td>
+                        {% if a.disposal_date %}
+                        <span class="badge badge-danger">Abgegangen ({{ a.disposal_date|date_format }})</span>
+                        {% elif a._book_value <= (a.salvage_value or 0) %}
+                        <span class="badge badge-warning">Abgeschrieben</span>
+                        {% else %}
+                        <span class="badge badge-success">Aktiv</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="btn btn-sm btn-outline">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Delete Bundle -->
+<div class="card">
+    <div class="card-header text-danger">Gefahrenzone</div>
+    <p class="text-muted text-sm mb-16">Das Löschen des gesamten Bündels kann nicht rückgängig gemacht werden.</p>
+    <form method="POST" action="{{ url_for('admin.bundle_delete', bundle_id=bundle_id) }}"
+          onsubmit="return confirm('Gesamtes Bündel ({{ items|length }} Stk.) wirklich unwiderruflich löschen?')">
+        <button type="submit" class="btn btn-danger">Bündel löschen ({{ items|length }} Stk.)</button>
+    </form>
+</div>
+{% endblock %}

@@ -904,13 +904,34 @@ def asset_dispose(id):
                     net_val = gross_val
                     tax_val = 0.0
 
-            asset.disposal_date = parse_date(request.form.get('disposal_date'))
+            disposal_date = parse_date(request.form.get('disposal_date'))
+            asset.disposal_date = disposal_date
             asset.disposal_price_gross = gross_val
             asset.disposal_price = net_val
             asset.disposal_tax_treatment = tax_treatment
             asset.disposal_tax_rate = effective_rate
             asset.disposal_tax_amount = tax_val
             asset.disposal_reason = request.form.get('disposal_reason', 'sold')
+
+            # Optional: Book disposal proceeds to account
+            if not is_edit:
+                book_inflow = request.form.get('book_inflow') == '1'
+                inflow_account_id = request.form.get('inflow_account_id', type=int)
+                if book_inflow and inflow_account_id and gross_val > 0:
+                    inflow_tx = Transaction(
+                        date=disposal_date,
+                        type='income',
+                        description=f'Veräußerung: {asset.name}',
+                        amount=gross_val,
+                        net_amount=net_val,
+                        tax_amount=tax_val,
+                        tax_treatment=tax_treatment,
+                        tax_rate=effective_rate,
+                        account_id=inflow_account_id,
+                        linked_asset_id=asset.id,
+                        notes='Automatisch erstellt bei Veräußerung',
+                    )
+                    db.session.add(inflow_tx)
 
             db.session.commit()
             flash('Abgang wurde ' + ('aktualisiert.' if is_edit else 'erfasst.'), 'success')
@@ -920,11 +941,13 @@ def asset_dispose(id):
 
     book_value = get_book_value(asset)
     settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('asset_dispose.html',
                            asset=asset,
                            book_value=book_value,
                            is_edit=is_edit,
                            settings=settings,
+                           accounts=accounts,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
 
@@ -957,6 +980,129 @@ def asset_delete(id):
     db.session.commit()
     flash('Anlagegut wurde gelöscht.', 'success')
     return redirect(url_for('admin.assets'))
+
+
+@admin_bp.route('/assets/bundle/<bundle_id>')
+def bundle_detail(bundle_id):
+    """Detail page for an asset bundle."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).order_by(Asset.id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    representative = items[0]
+    base_name = representative.name.rsplit(' (', 1)[0] if '(' in representative.name else representative.name
+
+    for a in items:
+        a._book_value = get_book_value(a)
+        a._disposal_result = get_disposal_result(a)
+
+    active_count = sum(1 for a in items if a.disposal_date is None)
+    total_net = sum(a.purchase_price_net for a in items)
+    total_gross = sum(a.purchase_price_gross for a in items)
+    total_book_value = sum(a._book_value for a in items)
+
+    # Linked transaction for purchase outflow (linked to first item)
+    linked_tx = Transaction.query.filter_by(linked_asset_id=representative.id).filter(
+        Transaction.description.like('Anlagekauf:%')
+    ).first()
+    if not linked_tx:
+        linked_tx = Transaction.query.filter_by(linked_asset_id=representative.id).first()
+
+    # Disposal linked transactions (any item)
+    disposal_txs = []
+    for a in items:
+        dtx = Transaction.query.filter_by(linked_asset_id=a.id).filter(
+            Transaction.description.like('Veräußerung:%')
+        ).first()
+        if dtx:
+            disposal_txs.append(dtx)
+
+    settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
+    return render_template('bundle_detail.html',
+                           items=items,
+                           bundle_id=bundle_id,
+                           base_name=base_name,
+                           representative=representative,
+                           active_count=active_count,
+                           total_net=total_net,
+                           total_gross=total_gross,
+                           total_book_value=total_book_value,
+                           linked_tx=linked_tx,
+                           disposal_txs=disposal_txs,
+                           accounts=accounts,
+                           methods=DEPRECIATION_METHODS,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
+                           current_year=date.today().year)
+
+
+@admin_bp.route('/assets/bundle/<bundle_id>/book-outflow', methods=['POST'])
+def bundle_book_outflow(bundle_id):
+    """Book purchase outflow for an entire bundle."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).order_by(Asset.id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    representative = items[0]
+    existing = Transaction.query.filter_by(linked_asset_id=representative.id).filter(
+        Transaction.description.like('Anlagekauf:%')
+    ).first()
+    if existing:
+        flash('Es existiert bereits eine verknüpfte Kaufbuchung für dieses Bündel.', 'warning')
+        return redirect(url_for('admin.bundle_detail', bundle_id=bundle_id))
+
+    account_id = request.form.get('outflow_account_id', type=int)
+    if not account_id:
+        flash('Bitte ein Konto auswählen.', 'error')
+        return redirect(url_for('admin.bundle_detail', bundle_id=bundle_id))
+
+    base_name = representative.name.rsplit(' (', 1)[0] if '(' in representative.name else representative.name
+    total_gross = sum(a.purchase_price_gross for a in items)
+    total_net = sum(a.purchase_price_net for a in items)
+    total_tax = sum(a.purchase_tax_amount or 0 for a in items)
+
+    try:
+        outflow_tx = Transaction(
+            date=representative.purchase_date,
+            type='expense',
+            description=f'Anlagekauf: {base_name} ({len(items)} Stk.)',
+            amount=total_gross,
+            net_amount=total_net,
+            tax_amount=total_tax,
+            tax_treatment=representative.purchase_tax_treatment or 'none',
+            tax_rate=representative.purchase_tax_rate or 0,
+            account_id=account_id,
+            linked_asset_id=representative.id,
+            notes='Automatisch erstellt bei nachträglicher Kontobuchung (Bündel)',
+        )
+        db.session.add(outflow_tx)
+        db.session.commit()
+        flash('Kontoabgang wurde gebucht.', 'success')
+    except Exception as e:
+        flash(f'Fehler: {str(e)}', 'error')
+
+    return redirect(url_for('admin.bundle_detail', bundle_id=bundle_id))
+
+
+@admin_bp.route('/assets/bundle/<bundle_id>/unlink-outflow', methods=['POST'])
+def bundle_unlink_outflow(bundle_id):
+    """Remove purchase outflow transaction for a bundle."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).order_by(Asset.id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    representative = items[0]
+    deleted = Transaction.query.filter_by(linked_asset_id=representative.id).delete()
+    db.session.commit()
+    if deleted:
+        flash('Verknüpfte Kontobuchung wurde entfernt.', 'success')
+    else:
+        flash('Keine verknüpfte Buchung gefunden.', 'warning')
+    return redirect(url_for('admin.bundle_detail', bundle_id=bundle_id))
 
 
 @admin_bp.route('/assets/bundle/<bundle_id>/dispose', methods=['GET', 'POST'])
@@ -1015,6 +1161,7 @@ def bundle_dispose(bundle_id):
             disposal_reason = request.form.get('disposal_reason', 'sold')
 
             disposed = 0
+            first_disposed_id = None
             for a in active_items:
                 if a.id in selected_ids:
                     a.disposal_date = disposal_date
@@ -1024,22 +1171,46 @@ def bundle_dispose(bundle_id):
                     a.disposal_tax_rate = effective_rate
                     a.disposal_tax_amount = unit_tax
                     a.disposal_reason = disposal_reason
+                    if first_disposed_id is None:
+                        first_disposed_id = a.id
                     disposed += 1
+
+            # Optional: Book disposal proceeds to account
+            book_inflow = request.form.get('book_inflow') == '1'
+            inflow_account_id = request.form.get('inflow_account_id', type=int)
+            if book_inflow and inflow_account_id and total_gross > 0 and first_disposed_id:
+                base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
+                inflow_tx = Transaction(
+                    date=disposal_date,
+                    type='income',
+                    description=f'Veräußerung: {base_name} ({disposed} Stk.)',
+                    amount=total_gross,
+                    net_amount=total_net,
+                    tax_amount=total_tax,
+                    tax_treatment=tax_treatment,
+                    tax_rate=effective_rate,
+                    account_id=inflow_account_id,
+                    linked_asset_id=first_disposed_id,
+                    notes='Automatisch erstellt bei Veräußerung (Bündel-Teilabgang)',
+                )
+                db.session.add(inflow_tx)
 
             db.session.commit()
             flash(f'{disposed} Anlagegüter als abgegangen erfasst.', 'success')
-            return redirect(url_for('admin.assets'))
+            return redirect(url_for('admin.bundle_detail', bundle_id=bundle_id))
         except Exception as e:
             flash(f'Fehler: {str(e)}', 'error')
 
     base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
     settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('bundle_dispose.html',
                            items=items,
                            active_items=active_items,
                            bundle_id=bundle_id,
                            base_name=base_name,
                            settings=settings,
+                           accounts=accounts,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
 
