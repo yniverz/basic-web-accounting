@@ -874,6 +874,7 @@ def bundle_edit(bundle_id):
                     )
                     db.session.add(new_asset)
                     items.append(new_asset)
+                db.session.flush()  # assign IDs to new items
 
             count = new_quantity
             unit_gross = round(total_gross / count, 2)
