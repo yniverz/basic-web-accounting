@@ -19,7 +19,13 @@
     <strong>📦 Bündel-Anlagegut</strong>
     <span class="text-muted text-sm">— Dieses Anlagegut gehört zu einem Bündel
     ({{ bundle_count }} Stk.{% if bundle_active < bundle_count %}, {{ bundle_active }} aktiv{% endif %}).</span>
-    <a href="{{ url_for('admin.assets') }}" class="text-accent text-sm" style="margin-left: 8px;">Alle anzeigen</a>
+    <div class="mt-6 d-flex gap-10">
+        <a href="{{ url_for('admin.bundle_edit', bundle_id=asset.bundle_id) }}" class="btn btn-sm btn-outline">Ganzes Bündel bearbeiten</a>
+        {% if bundle_active > 0 %}
+        <a href="{{ url_for('admin.bundle_dispose', bundle_id=asset.bundle_id) }}" class="btn btn-sm btn-outline">Teilabgang</a>
+        {% endif %}
+        <a href="{{ url_for('admin.assets') }}" class="text-accent text-sm" style="align-self: center;">Alle anzeigen</a>
+    </div>
 </div>
 {% endif %}
 

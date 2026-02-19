@@ -1,0 +1,346 @@
+{% extends "admin/base.html" %}
+{% block title %}Bündel bearbeiten — {{ base_name }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📦 Bündel bearbeiten</h1>
+    <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card" style="background: var(--bg-secondary); padding: 12px 16px; margin-bottom: 16px;">
+    <strong>{{ items|length }} Anlagegüter</strong>
+    <span class="text-muted text-sm">— Alle Änderungen werden auf sämtliche {{ items|length }} Stück angewendet. Der Preis wird als Gesamtpreis interpretiert und gleichmäßig aufgeteilt.</span>
+    {% set disposed_count = items | selectattr('disposal_date') | list | length %}
+    {% if disposed_count > 0 %}
+    <div class="mt-6 text-sm" style="color: var(--color-warning);">
+        ⚠ {{ disposed_count }} von {{ items|length }} Stück sind bereits abgegangen. Die Änderungen werden trotzdem auf alle angewendet (rückwirkend).
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <form method="POST" enctype="multipart/form-data">
+        <div class="card-header">Grunddaten</div>
+
+        <div class="form-group">
+            <label for="name">Bezeichnung (Basisname)</label>
+            <input type="text" id="name" name="name"
+                   value="{{ base_name }}" required
+                   placeholder="z.B. MacBook Pro, Bürostuhl, Drucker">
+            <span class="text-muted text-xs mt-4 d-inline">Jedes Stück erhält automatisch den Zusatz "(1/{{ items|length }})", "(2/{{ items|length }})", etc.</span>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Beschreibung</label>
+            <input type="text" id="description" name="description"
+                   value="{{ representative.description or '' }}"
+                   placeholder="Optionale Details (Seriennummer, Modell, etc.)">
+        </div>
+
+        <hr class="section-divider">
+        <div class="card-header">Anschaffung</div>
+
+        <div class="form-group">
+            <label for="purchase_date">Anschaffungsdatum</label>
+            <input type="date" id="purchase_date" name="purchase_date"
+                   value="{{ representative.purchase_date.isoformat() }}" required>
+        </div>
+
+        {% if settings.tax_mode == 'regular' %}
+        <div class="form-row">
+            <div class="form-group">
+                <label for="purchase_tax_treatment">Steuerbehandlung (Kauf)</label>
+                <select id="purchase_tax_treatment" name="purchase_tax_treatment" onchange="updatePurchaseTax()">
+                    {% for key, label in tax_treatment_labels.items() %}
+                    <option value="{{ key }}"
+                            data-rate="{% if key == 'standard' %}{{ settings.tax_rate }}{% elif key == 'reduced' %}{{ settings.tax_rate_reduced }}{% else %}0{% endif %}"
+                            {{ 'selected' if representative.purchase_tax_treatment == key }}>
+                        {{ label }}{% if key == 'standard' %} ({{ settings.tax_rate }}%){% elif key == 'reduced' %} ({{ settings.tax_rate_reduced }}%){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="purchase_custom_rate_group" style="display: none;">
+                <label for="purchase_custom_tax_rate">Steuersatz (%)</label>
+                <input type="number" id="purchase_custom_tax_rate" name="purchase_custom_tax_rate" step="0.1" min="0" max="100"
+                       value="{{ representative.purchase_tax_rate if representative.purchase_tax_treatment == 'custom' else '' }}"
+                       placeholder="z.B. 5.0" onchange="recalcPurchase()">
+            </div>
+        </div>
+        {% else %}
+        <input type="hidden" name="purchase_tax_treatment" value="none">
+        {% endif %}
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Eingabemodus</label>
+                <div class="d-flex gap-10">
+                    <label class="radio-label">
+                        <input type="radio" name="purchase_input_mode" value="gross" checked onchange="togglePurchaseMode()"> Brutto
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="purchase_input_mode" value="net" onchange="togglePurchaseMode()"> Netto
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" id="purchase_gross_group">
+                <label for="purchase_price_gross">Gesamtpreis Brutto (€) <span class="text-muted text-sm">— für alle {{ items|length }} Stück</span></label>
+                <input type="number" id="purchase_price_gross" name="purchase_price_gross"
+                       step="0.01" min="0.01"
+                       value="{{ total_gross|round(2) }}" required
+                       placeholder="0,00"
+                       oninput="recalcPurchase()">
+            </div>
+            <div class="form-group" id="purchase_net_group" style="display: none;">
+                <label for="purchase_price_net">Gesamtpreis Netto (€) <span class="text-muted text-sm">— für alle {{ items|length }} Stück</span></label>
+                <input type="number" id="purchase_price_net" name="purchase_price_net"
+                       step="0.01" min="0.01"
+                       value="{{ total_net|round(2) }}"
+                       placeholder="0,00"
+                       oninput="recalcPurchase()">
+            </div>
+            <div class="form-group">
+                <label for="salvage_value">Erinnerungswert pro Stück (€)</label>
+                <input type="number" id="salvage_value" name="salvage_value"
+                       step="0.01" min="0"
+                       value="{{ representative.salvage_value or 0 }}"
+                       placeholder="0,00">
+                <span class="text-muted text-xs mt-4 d-inline">Üblicherweise 0 € oder 1 €</span>
+            </div>
+        </div>
+
+        {% if settings.tax_mode == 'regular' %}
+        <div class="card" id="purchase_tax_summary" style="background: var(--bg-secondary); padding: 12px 16px; margin-bottom: 16px;">
+            <div class="d-flex justify-between text-sm">
+                <span>Gesamt Netto (AfA-Basis):</span>
+                <span id="purchase_calc_net">–</span>
+            </div>
+            <div class="d-flex justify-between text-sm">
+                <span>Vorsteuer (<span id="purchase_calc_rate">0</span>%):</span>
+                <span id="purchase_calc_tax">–</span>
+            </div>
+            <div class="d-flex justify-between text-sm font-semibold" style="border-top: 1px solid var(--border-color); padding-top: 4px; margin-top: 4px;">
+                <span>Gesamt Brutto:</span>
+                <span id="purchase_calc_gross">–</span>
+            </div>
+            <div class="d-flex justify-between text-sm text-muted" style="border-top: 1px solid var(--border-color); padding-top: 4px; margin-top: 4px;">
+                <span>Pro Stück Netto:</span>
+                <span id="purchase_calc_unit_net">–</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <hr class="section-divider">
+        <div class="card-header">Abschreibung</div>
+
+        <div class="form-group">
+            <label for="depreciation_category_id">AfA-Kategorie</label>
+            <select id="depreciation_category_id" name="depreciation_category_id" onchange="applyCategoryDefaults()">
+                <option value="">— Keine Kategorie —</option>
+                {% for cat in depreciation_categories %}
+                <option value="{{ cat.id }}"
+                        data-months="{{ cat.useful_life_months }}"
+                        data-method="{{ cat.default_method }}"
+                        {{ 'selected' if representative.depreciation_category_id == cat.id }}>
+                    {{ cat.name }} ({{ (cat.useful_life_months / 12)|round(1) }} J.)
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="depreciation_method">AfA-Methode</label>
+                <select id="depreciation_method" name="depreciation_method" required onchange="updateMethodFields()">
+                    {% for key, label in methods.items() %}
+                    <option value="{{ key }}"
+                            {{ 'selected' if representative.depreciation_method == key }}>
+                        {{ label }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div id="method-hint" class="text-muted text-xs mt-4"></div>
+            </div>
+            <div class="form-group" id="useful-life-group">
+                <label for="useful_life_months">Nutzungsdauer (Monate)</label>
+                <input type="number" id="useful_life_months" name="useful_life_months"
+                       min="1"
+                       value="{{ representative.useful_life_months or '' }}"
+                       placeholder="z.B. 36">
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="form-group">
+            <label for="document">Beleg / Rechnung</label>
+            <input type="file" id="document" name="document" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
+            {% if representative.document_filename %}
+            <div class="mt-6 text-sm">
+                Aktuell: <a href="{{ url_for('admin.uploaded_file', filename=representative.document_filename) }}" target="_blank" class="text-accent">{{ representative.document_filename }}</a>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="notes">Notizen</label>
+            <textarea id="notes" name="notes" rows="3"
+                      placeholder="Optionale Notizen...">{{ representative.notes or '' }}</textarea>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-primary">
+                Alle {{ items|length }} Stück aktualisieren
+            </button>
+            <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+
+<!-- Delete bundle -->
+<div class="card">
+    <div class="card-header text-danger">Gefahrenzone</div>
+    <p class="text-muted text-sm mb-16">Alle {{ items|length }} Anlagegüter in diesem Bündel werden unwiderruflich gelöscht.</p>
+    <form method="POST" action="{{ url_for('admin.bundle_delete', bundle_id=bundle_id) }}"
+          onsubmit="return confirm('Wirklich alle {{ items|length }} Anlagegüter in diesem Bündel unwiderruflich löschen?')">
+        <button type="submit" class="btn btn-danger">Ganzes Bündel löschen ({{ items|length }} Stk.)</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var bundleCount = {{ items|length }};
+var rules = {
+    gwg_limit: {{ rules.gwg_sofort_limit }},
+    sammelposten_min: {{ rules.sammelposten_min }},
+    sammelposten_max: {{ rules.sammelposten_max }},
+    sammelposten_years: {{ rules.sammelposten_years }}
+};
+var standardRate = {{ settings.tax_rate if settings else 19 }};
+var reducedRate = {{ settings.tax_rate_reduced if settings and settings.tax_rate_reduced else 7 }};
+var isRegular = {{ 'true' if settings and settings.tax_mode == 'regular' else 'false' }};
+
+function getPurchaseRate() {
+    if (!isRegular) return 0;
+    var sel = document.getElementById('purchase_tax_treatment');
+    if (!sel) return 0;
+    var val = sel.value;
+    if (val === 'standard') return standardRate;
+    if (val === 'reduced') return reducedRate;
+    if (val === 'custom') return parseFloat(document.getElementById('purchase_custom_tax_rate').value) || 0;
+    return 0;
+}
+
+function updatePurchaseTax() {
+    var sel = document.getElementById('purchase_tax_treatment');
+    if (!sel) return;
+    var cg = document.getElementById('purchase_custom_rate_group');
+    if (cg) cg.style.display = (sel.value === 'custom') ? '' : 'none';
+    recalcPurchase();
+}
+
+function togglePurchaseMode() {
+    var mode = document.querySelector('input[name="purchase_input_mode"]:checked').value;
+    var grossGrp = document.getElementById('purchase_gross_group');
+    var netGrp = document.getElementById('purchase_net_group');
+    var grossIn = document.getElementById('purchase_price_gross');
+    var netIn = document.getElementById('purchase_price_net');
+    if (mode === 'net') {
+        grossGrp.style.display = 'none';
+        netGrp.style.display = '';
+        grossIn.removeAttribute('required');
+        netIn.setAttribute('required', '');
+    } else {
+        grossGrp.style.display = '';
+        netGrp.style.display = 'none';
+        grossIn.setAttribute('required', '');
+        netIn.removeAttribute('required');
+    }
+    recalcPurchase();
+}
+
+function recalcPurchase() {
+    var rate = getPurchaseRate();
+    var mode = document.querySelector('input[name="purchase_input_mode"]:checked').value;
+    var net, gross, tax;
+
+    if (mode === 'net') {
+        net = parseFloat(document.getElementById('purchase_price_net').value) || 0;
+        tax = rate > 0 ? net * (rate / 100) : 0;
+        gross = net + tax;
+    } else {
+        gross = parseFloat(document.getElementById('purchase_price_gross').value) || 0;
+        net = rate > 0 ? gross / (1 + rate / 100) : gross;
+        tax = gross - net;
+    }
+
+    if (isRegular) {
+        var cn = document.getElementById('purchase_calc_net');
+        var ct = document.getElementById('purchase_calc_tax');
+        var cg = document.getElementById('purchase_calc_gross');
+        var cr = document.getElementById('purchase_calc_rate');
+        var cu = document.getElementById('purchase_calc_unit_net');
+        if (cn) cn.textContent = net.toFixed(2) + ' €';
+        if (ct) ct.textContent = tax.toFixed(2) + ' €';
+        if (cg) cg.textContent = gross.toFixed(2) + ' €';
+        if (cr) cr.textContent = rate.toFixed(1);
+        if (cu) cu.textContent = (net / bundleCount).toFixed(2) + ' €';
+    }
+
+    updateMethodHint(net / bundleCount);
+}
+
+function updateMethodHint(netPrice) {
+    var hint = document.getElementById('method-hint');
+    var method = document.getElementById('depreciation_method').value;
+    if (netPrice <= rules.gwg_limit && method !== 'sofort') {
+        hint.textContent = 'Hinweis: Stückpreis netto ≤ ' + rules.gwg_limit + ' € — Sofortabschreibung (GWG) möglich.';
+        hint.style.color = '';
+    } else if (netPrice > rules.gwg_limit && method === 'sofort') {
+        hint.textContent = '⚠ Stückpreis netto > ' + rules.gwg_limit + ' € — Sofortabschreibung nicht zulässig!';
+        hint.style.color = 'var(--color-danger)';
+    } else if (netPrice >= rules.sammelposten_min && netPrice <= rules.sammelposten_max) {
+        hint.textContent = 'Stückpreis netto ' + rules.sammelposten_min + '–' + rules.sammelposten_max + ' € — Sammelposten möglich.';
+        hint.style.color = '';
+    } else {
+        hint.textContent = '';
+    }
+}
+
+function updateMethodFields() {
+    var method = document.getElementById('depreciation_method').value;
+    var usefulLifeGroup = document.getElementById('useful-life-group');
+    if (method === 'sofort' || method === 'sammelposten') {
+        usefulLifeGroup.style.display = 'none';
+    } else {
+        usefulLifeGroup.style.display = '';
+    }
+    recalcPurchase();
+}
+
+function applyCategoryDefaults() {
+    var select = document.getElementById('depreciation_category_id');
+    var option = select.options[select.selectedIndex];
+    if (option && option.value) {
+        var months = option.getAttribute('data-months');
+        var method = option.getAttribute('data-method');
+        if (months) document.getElementById('useful_life_months').value = months;
+        if (method) {
+            document.getElementById('depreciation_method').value = method;
+            updateMethodFields();
+        }
+    }
+}
+
+// Initialize
+updateMethodFields();
+updatePurchaseTax();
+recalcPurchase();
+</script>
+{% endblock %}

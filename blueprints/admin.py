@@ -792,6 +792,141 @@ def bundle_dispose(bundle_id):
                            today=date.today().isoformat())
 
 
+@admin_bp.route('/assets/bundle/<bundle_id>/edit', methods=['GET', 'POST'])
+def bundle_edit(bundle_id):
+    """Edit all items in an asset bundle at once."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).order_by(Asset.id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    representative = items[0]
+    base_name = representative.name.rsplit(' (', 1)[0] if '(' in representative.name else representative.name
+
+    if request.method == 'POST':
+        try:
+            settings = SiteSettings.get_settings()
+            new_base_name = request.form.get('name', '').strip()
+            description = request.form.get('description', '').strip() or None
+            purchase_date = parse_date(request.form.get('purchase_date'))
+
+            tax_treatment = request.form.get('purchase_tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+            custom_rate = parse_amount(request.form.get('purchase_custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+            # Total price for the whole bundle
+            input_mode = request.form.get('purchase_input_mode', 'gross')
+            if input_mode == 'net':
+                total_net = parse_amount(request.form.get('purchase_price_net'))
+                if effective_rate > 0:
+                    total_gross, total_tax = calculate_tax_from_net(total_net, effective_rate)
+                else:
+                    total_gross = total_net
+                    total_tax = 0.0
+            else:
+                total_gross = parse_amount(request.form.get('purchase_price_gross'))
+                if effective_rate > 0:
+                    total_net, total_tax = calculate_tax(total_gross, effective_rate)
+                else:
+                    total_net = total_gross
+                    total_tax = 0.0
+
+            count = len(items)
+            unit_gross = round(total_gross / count, 2)
+            unit_net = round(total_net / count, 2)
+            unit_tax = round(total_tax / count, 2)
+
+            depreciation_method = request.form.get('depreciation_method', 'linear')
+            useful_life_months = request.form.get('useful_life_months', type=int) or None
+            salvage_value = parse_amount(request.form.get('salvage_value', '0'))
+            depreciation_category_id = request.form.get('depreciation_category_id', type=int) or None
+            notes = request.form.get('notes', '').strip() or None
+
+            # File upload (shared for all)
+            file = request.files.get('document')
+            new_filename = None
+            if file and file.filename and allowed_file(file.filename):
+                new_filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], new_filename))
+
+            for i, a in enumerate(items, 1):
+                a.name = f"{new_base_name} ({i}/{count})"
+                a.description = description
+                a.purchase_date = purchase_date
+                a.purchase_price_gross = unit_gross
+                a.purchase_price_net = unit_net
+                a.purchase_tax_treatment = tax_treatment
+                a.purchase_tax_rate = effective_rate
+                a.purchase_tax_amount = unit_tax
+                a.depreciation_method = depreciation_method
+                a.useful_life_months = useful_life_months
+                a.salvage_value = salvage_value
+                a.depreciation_category_id = depreciation_category_id
+                a.notes = notes
+                if new_filename:
+                    # Remove old file if different
+                    if a.document_filename and a.document_filename != new_filename:
+                        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
+                        if os.path.exists(old_path):
+                            os.remove(old_path)
+                    a.document_filename = new_filename
+
+            db.session.commit()
+            flash(f'Bündel "{new_base_name}" ({count} Stk.) wurde aktualisiert.', 'success')
+            return redirect(url_for('admin.assets'))
+        except Exception as e:
+            flash(f'Fehler beim Aktualisieren: {str(e)}', 'error')
+
+    dep_cats = DepreciationCategory.query.order_by(DepreciationCategory.sort_order, DepreciationCategory.name).all()
+    settings = SiteSettings.get_settings()
+
+    # Compute total prices for the bundle
+    total_gross = sum(a.purchase_price_gross for a in items)
+    total_net = sum(a.purchase_price_net for a in items)
+
+    return render_template('bundle_edit.html',
+                           items=items,
+                           bundle_id=bundle_id,
+                           base_name=base_name,
+                           representative=representative,
+                           total_gross=total_gross,
+                           total_net=total_net,
+                           methods=DEPRECIATION_METHODS,
+                           depreciation_categories=dep_cats,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
+                           rules=RULES,
+                           today=date.today().isoformat())
+
+
+@admin_bp.route('/assets/bundle/<bundle_id>/delete', methods=['POST'])
+def bundle_delete(bundle_id):
+    """Delete all items in an asset bundle."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
+    count = len(items)
+
+    # Remove shared document file(s)
+    removed_files = set()
+    for a in items:
+        if a.document_filename and a.document_filename not in removed_files:
+            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            removed_files.add(a.document_filename)
+        db.session.delete(a)
+
+    db.session.commit()
+    flash(f'Bündel "{base_name}" ({count} Stk.) wurde gelöscht.', 'success')
+    return redirect(url_for('admin.assets'))
+
+
 # --- EÜR Report ---
 
 @admin_bp.route('/report')

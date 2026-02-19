@@ -280,15 +280,16 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "edit_asset",
-            "description": "Edit an existing asset by ID.",
+            "description": "Edit an existing asset by ID. To edit ALL assets in a bundle at once, pass bundle_id instead of id. When editing a bundle: name is the base name (suffixes are auto-generated), purchase_price_gross is the TOTAL price for all items (split equally).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "integer"},
+                    "id": {"type": "integer", "description": "Single asset ID (use this OR bundle_id)"},
+                    "bundle_id": {"type": "string", "description": "Bundle ID to edit all items at once"},
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "purchase_date": {"type": "string"},
-                    "purchase_price_gross": {"type": "number"},
+                    "purchase_price_gross": {"type": "number", "description": "For bundles: TOTAL price for all items"},
                     "depreciation_method": {"type": "string"},
                     "useful_life_months": {"type": "integer"},
                     "salvage_value": {"type": "number"},
@@ -297,7 +298,7 @@ TOOL_DEFINITIONS = [
                     "custom_tax_rate": {"type": "number"},
                     "notes": {"type": "string"},
                 },
-                "required": ["id"],
+                "required": [],
             },
         },
     },
@@ -305,11 +306,14 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "delete_asset",
-            "description": "Delete an asset by ID.",
+            "description": "Delete an asset by ID, or delete ALL assets in a bundle by passing bundle_id.",
             "parameters": {
                 "type": "object",
-                "properties": {"id": {"type": "integer"}},
-                "required": ["id"],
+                "properties": {
+                    "id": {"type": "integer", "description": "Single asset ID (use this OR bundle_id)"},
+                    "bundle_id": {"type": "string", "description": "Bundle ID to delete all items at once"},
+                },
+                "required": [],
             },
         },
     },
@@ -813,6 +817,45 @@ def execute_tool(name, args):
         return {'status': 'created', 'asset': _asset_to_dict(created[0])}
 
     if name == 'edit_asset':
+        # Bundle edit: edit all items in a bundle at once
+        if 'bundle_id' in args:
+            items = Asset.query.filter_by(bundle_id=args['bundle_id']).order_by(Asset.id).all()
+            if not items:
+                return {'error': f"Bundle {args['bundle_id']} not found"}
+            count = len(items)
+            # For bundles, 'name' is the base name
+            base_name = args.get('name')
+            # Handle price: purchase_price_gross is TOTAL for all items
+            if 'purchase_price_gross' in args:
+                tax_treatment = args.get('purchase_tax_treatment', items[0].purchase_tax_treatment or 'none')
+                if settings.tax_mode == 'kleinunternehmer':
+                    tax_treatment = 'none'
+                total_gross = args['purchase_price_gross']
+                unit_gross = round(total_gross / count, 2)
+                unit_net, unit_tax, eff_rate = _apply_tax(unit_gross, tax_treatment, settings, args.get('custom_tax_rate'))
+            simple_fields = ['description', 'depreciation_method', 'useful_life_months',
+                             'salvage_value', 'depreciation_category_id', 'notes']
+            for i, a in enumerate(items, 1):
+                if base_name:
+                    a.name = f"{base_name} ({i}/{count})"
+                for k in simple_fields:
+                    if k in args:
+                        setattr(a, k, args[k])
+                if 'purchase_date' in args:
+                    a.purchase_date = parse_date(args['purchase_date'])
+                if 'purchase_price_gross' in args:
+                    a.purchase_price_gross = unit_gross
+                    a.purchase_price_net = unit_net
+                    a.purchase_tax_treatment = tax_treatment
+                    a.purchase_tax_rate = eff_rate
+                    a.purchase_tax_amount = unit_tax
+            db.session.commit()
+            return {'status': 'updated', 'count': count, 'bundle_id': args['bundle_id'],
+                    'assets': [_asset_to_dict(a) for a in items]}
+
+        # Single asset edit
+        if 'id' not in args:
+            return {'error': 'Either id or bundle_id is required'}
         a = Asset.query.get(args['id'])
         if not a:
             return {'error': f"Asset {args['id']} not found"}
@@ -838,6 +881,27 @@ def execute_tool(name, args):
         return {'status': 'updated', 'asset': _asset_to_dict(a)}
 
     if name == 'delete_asset':
+        # Bundle delete: delete all items in a bundle
+        if 'bundle_id' in args:
+            items = Asset.query.filter_by(bundle_id=args['bundle_id']).all()
+            if not items:
+                return {'error': f"Bundle {args['bundle_id']} not found"}
+            count = len(items)
+            removed_files = set()
+            for a in items:
+                if a.document_filename and a.document_filename not in removed_files:
+                    from flask import current_app
+                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                    removed_files.add(a.document_filename)
+                db.session.delete(a)
+            db.session.commit()
+            return {'status': 'deleted', 'count': count, 'bundle_id': args['bundle_id']}
+
+        # Single asset delete
+        if 'id' not in args:
+            return {'error': 'Either id or bundle_id is required'}
         a = Asset.query.get(args['id'])
         if not a:
             return {'error': f"Asset {args['id']} not found"}
@@ -1231,6 +1295,16 @@ def _enrich_args_for_display(tool_name, args):
                 resolved.append(f"{eid} (nicht gefunden ✗)")
         enriched['ids'] = ', '.join(resolved)
 
+    # Resolve 'bundle_id'
+    if 'bundle_id' in enriched:
+        bid = enriched['bundle_id']
+        items = Asset.query.filter_by(bundle_id=bid).all()
+        if items:
+            base = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
+            enriched['bundle_id'] = f"{bid[:8]}… ({base}, {len(items)} Stk.)"
+        else:
+            enriched['bundle_id'] = f"{bid[:8]}… (nicht gefunden ✗)"
+
     # Resolve 'category_id'
     if 'category_id' in enriched:
         cat = Category.query.get(enriched['category_id'])
@@ -1270,8 +1344,14 @@ def _summarize_result(name, result):
                 return f'{qty}× erstellt ✓{suffix}'
             return f'Erstellt ✓{suffix}'
         if status == 'updated':
+            count = result.get('count')
+            if count and count > 1:
+                return f'{count}× aktualisiert ✓{suffix}'
             return f'Aktualisiert ✓{suffix}'
         if status == 'deleted':
+            count = result.get('count')
+            if count and count > 1:
+                return f'{count}× gelöscht ✓'
             return f'Gelöscht ✓{suffix}'
         if status == 'disposed':
             count = result.get('count')
