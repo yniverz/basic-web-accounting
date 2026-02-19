@@ -188,16 +188,23 @@ def _migrate_schema(db):
 def _seed_defaults(app):
     """Create default admin user and settings if they don't exist."""
     admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
-    admin_password = os.environ.get('ADMIN_PASSWORD', 'password123')
+    admin_password = os.environ.get('ADMIN_PASSWORD', '')
 
-    if not User.query.filter_by(username=admin_username).first():
-        admin = User(
-            username=admin_username,
-            password_hash=generate_password_hash(admin_password),
-            display_name='Administrator',
-            is_admin=True,
-        )
-        db.session.add(admin)
+    existing_admin = User.query.filter_by(username=admin_username).first()
+    if not existing_admin:
+        # Check if there are ANY admin users at all; if not, create one
+        if not User.query.filter_by(is_admin=True).first():
+            admin = User(
+                username=admin_username,
+                password_hash=generate_password_hash(admin_password) if admin_password else generate_password_hash('password123'),
+                display_name='Administrator',
+                is_admin=True,
+            )
+            db.session.add(admin)
+            db.session.commit()
+    elif admin_password:
+        # Admin user exists – update password if env var is set
+        existing_admin.password_hash = generate_password_hash(admin_password)
         db.session.commit()
 
     # Ensure settings exist
