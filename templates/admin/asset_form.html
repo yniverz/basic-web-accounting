@@ -25,6 +25,15 @@
                    placeholder="Optionale Details (Seriennummer, Modell, etc.)">
         </div>
 
+        {% if not asset %}
+        <div class="form-group">
+            <label for="quantity">Stückzahl</label>
+            <input type="number" id="quantity" name="quantity" min="1" value="1"
+                   placeholder="1" oninput="updateQuantityHint()">
+            <span class="text-muted text-xs mt-4 d-inline" id="quantity-hint"></span>
+        </div>
+        {% endif %}
+
         <hr class="section-divider">
         <div class="card-header">Anschaffung</div>
 
@@ -315,9 +324,22 @@ function applyCategoryDefaults() {
     }
 }
 
+function updateQuantityHint() {
+    var qtyEl = document.getElementById('quantity');
+    var hint = document.getElementById('quantity-hint');
+    if (!qtyEl || !hint) return;
+    var qty = parseInt(qtyEl.value) || 1;
+    if (qty > 1) {
+        hint.textContent = 'Es werden ' + qty + ' einzelne Anlagegüter als Bündel erstellt. Der Preis wird als Gesamtpreis interpretiert und durch ' + qty + ' geteilt.';
+    } else {
+        hint.textContent = '';
+    }
+}
+
 // Initialize
 updateMethodFields();
 updatePurchaseTax();
 recalcPurchase();
+updateQuantityHint();
 </script>
 {% endblock %}

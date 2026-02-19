@@ -177,6 +177,7 @@ def _migrate_schema(db):
         ('assets', 'disposal_tax_rate', 'REAL'),
         ('assets', 'disposal_tax_amount', 'REAL'),
         ('site_settings', 'favicon_filename', 'VARCHAR(200)'),
+        ('assets', 'bundle_id', 'VARCHAR(36)'),
     ]
 
     for table, column, col_type in migrations:

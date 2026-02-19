@@ -33,6 +33,36 @@
     </div>
 </div>
 
+<!-- Macro for an asset row -->
+{% macro asset_row(a, indent=false) %}
+<tr>
+    <td style="{{ 'padding-left: 2.5em;' if indent else '' }}">
+        {{ '└ ' if indent else '' }}<a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
+            {{ a.name }}
+        </a>
+        {% if a.description and not indent %}
+        <br><span class="text-muted text-sm">{{ a.description[:60] }}{{ '...' if a.description|length > 60 }}</span>
+        {% endif %}
+    </td>
+    <td>{{ a.purchase_date|date_format }}</td>
+    <td><span class="text-sm">{{ methods.get(a.depreciation_method, a.depreciation_method) }}</span></td>
+    <td style="text-align: right;">{{ a.purchase_price_net|currency }}</td>
+    <td style="text-align: right;">{{ a._book_value|currency }}</td>
+    <td>
+        {% if a.disposal_date %}
+        <span class="badge badge-danger">Abgegangen</span>
+        {% elif a._book_value <= (a.salvage_value or 0) %}
+        <span class="badge badge-warning">Abgeschrieben</span>
+        {% else %}
+        <span class="badge badge-success">Aktiv</span>
+        {% endif %}
+    </td>
+    <td>
+        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="btn btn-sm btn-outline">Details</a>
+    </td>
+</tr>
+{% endmacro %}
+
 <!-- Assets Table -->
 {% if assets %}
 <div class="card" style="padding: 0; overflow: hidden;">
@@ -50,15 +80,43 @@
                 </tr>
             </thead>
             <tbody>
-                {% for a in assets %}
-                <tr>
+                {# Bundles #}
+                {% for bid, items in bundles.items() %}
+                {% set total_net = items | map(attribute='purchase_price_net') | sum %}
+                {% set total_bv = items | map(attribute='_book_value') | sum %}
+                {% set active_count = items | selectattr('is_active') | list | length %}
+                {% set base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name %}
+                <tr class="bundle-header" style="cursor: pointer; background: var(--bg-secondary);" onclick="toggleBundle('{{ bid }}')">
                     <td>
-                        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
+                        <span class="bundle-toggle" id="toggle-{{ bid }}">▶</span>
+                        <strong>📦 {{ base_name }}</strong>
+                        <span class="text-muted text-sm">({{ items|length }} Stk.{% if active_count < items|length %}, {{ active_count }} aktiv{% endif %})</span>
+                    </td>
+                    <td>{{ items[0].purchase_date|date_format }}</td>
+                    <td><span class="text-sm">{{ methods.get(items[0].depreciation_method, items[0].depreciation_method) }}</span></td>
+                    <td style="text-align: right;">{{ total_net|currency }}</td>
+                    <td style="text-align: right;">{{ total_bv|currency }}</td>
+                    <td>
+                        {% if active_count == 0 %}
+                        <span class="badge badge-danger">Abgegangen</span>
+                        {% elif active_count < items|length %}
+                        <span class="badge badge-warning">Teilweise</span>
+                        {% else %}
+                        <span class="badge badge-success">Aktiv</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if active_count > 0 %}
+                        <a href="{{ url_for('admin.bundle_dispose', bundle_id=bid) }}" class="btn btn-sm btn-outline" onclick="event.stopPropagation()">Teilabgang</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% for a in items %}
+                <tr class="bundle-row bundle-{{ bid }}" style="display: none;">
+                    <td style="padding-left: 2.5em;">
+                        └ <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
                             {{ a.name }}
                         </a>
-                        {% if a.description %}
-                        <br><span class="text-muted text-sm">{{ a.description[:60] }}{{ '...' if a.description|length > 60 }}</span>
-                        {% endif %}
                     </td>
                     <td>{{ a.purchase_date|date_format }}</td>
                     <td><span class="text-sm">{{ methods.get(a.depreciation_method, a.depreciation_method) }}</span></td>
@@ -78,6 +136,12 @@
                     </td>
                 </tr>
                 {% endfor %}
+                {% endfor %}
+
+                {# Standalone assets #}
+                {% for a in standalone %}
+                {{ asset_row(a) }}
+                {% endfor %}
             </tbody>
         </table>
     </div>
@@ -88,4 +152,16 @@
     <a href="{{ url_for('admin.asset_new') }}" class="btn btn-primary mt-16">Erstes Anlagegut anlegen</a>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleBundle(bid) {
+    var rows = document.querySelectorAll('.bundle-' + CSS.escape(bid));
+    var toggle = document.getElementById('toggle-' + bid);
+    var visible = rows.length > 0 && rows[0].style.display !== 'none';
+    rows.forEach(function(r) { r.style.display = visible ? 'none' : ''; });
+    if (toggle) toggle.textContent = visible ? '▶' : '▼';
+}
+</script>
 {% endblock %}

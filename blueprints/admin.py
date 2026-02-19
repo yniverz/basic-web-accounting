@@ -391,17 +391,29 @@ def assets():
     elif status_filter == 'disposed':
         query = query.filter(Asset.disposal_date.isnot(None))
 
-    assets_list = query.order_by(Asset.purchase_date.desc()).all()
+    assets_list = query.order_by(Asset.purchase_date.desc(), Asset.id).all()
 
     # Calculate book values
     for asset in assets_list:
         asset._book_value = get_book_value(asset)
+
+    # Group by bundle_id for display
+    from collections import OrderedDict
+    bundles = OrderedDict()  # bundle_id -> list of assets
+    standalone = []          # assets without bundle
+    for a in assets_list:
+        if a.bundle_id:
+            bundles.setdefault(a.bundle_id, []).append(a)
+        else:
+            standalone.append(a)
 
     total_purchase = sum(a.purchase_price_net for a in assets_list)
     total_book_value = sum(a._book_value for a in assets_list if a.disposal_date is None)
 
     return render_template('assets.html',
                            assets=assets_list,
+                           bundles=bundles,
+                           standalone=standalone,
                            status_filter=status_filter,
                            total_purchase=total_purchase,
                            total_book_value=total_book_value,
@@ -437,33 +449,61 @@ def asset_new():
                     net_val = gross_val
                     tax_val = 0.0
 
-            asset = Asset(
-                name=request.form.get('name', '').strip(),
-                description=request.form.get('description', '').strip() or None,
-                purchase_date=parse_date(request.form.get('purchase_date')),
-                purchase_price_gross=gross_val,
-                purchase_price_net=net_val,
-                purchase_tax_treatment=tax_treatment,
-                purchase_tax_rate=effective_rate,
-                purchase_tax_amount=tax_val,
-                depreciation_method=request.form.get('depreciation_method', 'linear'),
-                useful_life_months=request.form.get('useful_life_months', type=int) or None,
-                salvage_value=parse_amount(request.form.get('salvage_value', '0')),
-                depreciation_category_id=request.form.get('depreciation_category_id', type=int) or None,
-                notes=request.form.get('notes', '').strip() or None,
-            )
+            quantity = max(1, request.form.get('quantity', 1, type=int))
+            base_name = request.form.get('name', '').strip()
 
-            # File upload
+            # For bundles: gross/net/tax are total → compute per-unit
+            if quantity > 1:
+                import uuid
+                bundle_id = str(uuid.uuid4())
+                unit_gross = round(gross_val / quantity, 2)
+                unit_net = round(net_val / quantity, 2)
+                unit_tax = round(tax_val / quantity, 2)
+            else:
+                bundle_id = None
+                unit_gross = gross_val
+                unit_net = net_val
+                unit_tax = tax_val
+
+            # File upload (shared document for all bundle items)
             file = request.files.get('document')
+            doc_filename = None
             if file and file.filename and allowed_file(file.filename):
-                filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-                asset.document_filename = filename
+                doc_filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], doc_filename))
 
-            db.session.add(asset)
+            created_ids = []
+            for i in range(quantity):
+                item_name = f"{base_name} ({i+1}/{quantity})" if quantity > 1 else base_name
+                asset = Asset(
+                    name=item_name,
+                    description=request.form.get('description', '').strip() or None,
+                    bundle_id=bundle_id,
+                    purchase_date=parse_date(request.form.get('purchase_date')),
+                    purchase_price_gross=unit_gross,
+                    purchase_price_net=unit_net,
+                    purchase_tax_treatment=tax_treatment,
+                    purchase_tax_rate=effective_rate,
+                    purchase_tax_amount=unit_tax,
+                    depreciation_method=request.form.get('depreciation_method', 'linear'),
+                    useful_life_months=request.form.get('useful_life_months', type=int) or None,
+                    salvage_value=parse_amount(request.form.get('salvage_value', '0')),
+                    depreciation_category_id=request.form.get('depreciation_category_id', type=int) or None,
+                    notes=request.form.get('notes', '').strip() or None,
+                    document_filename=doc_filename,
+                )
+                db.session.add(asset)
+                db.session.flush()
+                created_ids.append(asset.id)
+
             db.session.commit()
-            flash('Anlagegut wurde erstellt.', 'success')
-            return redirect(url_for('admin.asset_detail', id=asset.id))
+
+            if quantity > 1:
+                flash(f'{quantity} Anlagegüter als Bündel erstellt.', 'success')
+                return redirect(url_for('admin.assets'))
+            else:
+                flash('Anlagegut wurde erstellt.', 'success')
+                return redirect(url_for('admin.asset_detail', id=created_ids[0]))
         except Exception as e:
             flash(f'Fehler beim Erstellen: {str(e)}', 'error')
 
@@ -486,6 +526,14 @@ def asset_detail(id):
     book_value = get_book_value(asset)
     disposal_result = get_disposal_result(asset)
 
+    # Bundle info
+    bundle_count = 0
+    bundle_active = 0
+    if asset.bundle_id:
+        siblings = Asset.query.filter_by(bundle_id=asset.bundle_id).all()
+        bundle_count = len(siblings)
+        bundle_active = sum(1 for s in siblings if s.disposal_date is None)
+
     settings = SiteSettings.get_settings()
     return render_template('asset_detail.html',
                            asset=asset,
@@ -495,7 +543,9 @@ def asset_detail(id):
                            methods=DEPRECIATION_METHODS,
                            settings=settings,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
-                           current_year=date.today().year)
+                           current_year=date.today().year,
+                           bundle_count=bundle_count,
+                           bundle_active=bundle_active)
 
 
 @admin_bp.route('/assets/<int:id>/edit', methods=['GET', 'POST'])
@@ -653,8 +703,93 @@ def asset_delete(id):
             os.remove(filepath)
     db.session.delete(asset)
     db.session.commit()
-    flash('Anlagegut wurde gel\u00f6scht.', 'success')
+    flash('Anlagegut wurde gelöscht.', 'success')
     return redirect(url_for('admin.assets'))
+
+
+@admin_bp.route('/assets/bundle/<bundle_id>/dispose', methods=['GET', 'POST'])
+def bundle_dispose(bundle_id):
+    """Dispose selected items from an asset bundle."""
+    items = Asset.query.filter_by(bundle_id=bundle_id).order_by(Asset.id).all()
+    if not items:
+        flash('Bündel nicht gefunden.', 'error')
+        return redirect(url_for('admin.assets'))
+
+    active_items = [a for a in items if a.disposal_date is None]
+    if not active_items:
+        flash('Alle Anlagegüter in diesem Bündel sind bereits abgegangen.', 'warning')
+        return redirect(url_for('admin.assets'))
+
+    # Compute book values
+    for a in items:
+        a._book_value = get_book_value(a)
+
+    if request.method == 'POST':
+        try:
+            settings = SiteSettings.get_settings()
+            selected_ids = request.form.getlist('selected_ids', type=int)
+            if not selected_ids:
+                flash('Bitte mindestens ein Anlagegut auswählen.', 'error')
+                return redirect(request.url)
+
+            tax_treatment = request.form.get('disposal_tax_treatment', 'none')
+            if settings.tax_mode == 'kleinunternehmer':
+                tax_treatment = 'none'
+            custom_rate = parse_amount(request.form.get('disposal_custom_tax_rate', '0'))
+            effective_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+            # Total disposal price, split equally among selected items
+            input_mode = request.form.get('disposal_input_mode', 'gross')
+            if input_mode == 'net':
+                total_net = parse_amount(request.form.get('disposal_price', '0'))
+                if effective_rate > 0:
+                    total_gross, total_tax = calculate_tax_from_net(total_net, effective_rate)
+                else:
+                    total_gross = total_net
+                    total_tax = 0.0
+            else:
+                total_gross = parse_amount(request.form.get('disposal_price_gross', '0'))
+                if effective_rate > 0:
+                    total_net, total_tax = calculate_tax(total_gross, effective_rate)
+                else:
+                    total_net = total_gross
+                    total_tax = 0.0
+
+            count = len(selected_ids)
+            unit_gross = round(total_gross / count, 2)
+            unit_net = round(total_net / count, 2)
+            unit_tax = round(total_tax / count, 2)
+            disposal_date = parse_date(request.form.get('disposal_date'))
+            disposal_reason = request.form.get('disposal_reason', 'sold')
+
+            disposed = 0
+            for a in active_items:
+                if a.id in selected_ids:
+                    a.disposal_date = disposal_date
+                    a.disposal_price_gross = unit_gross
+                    a.disposal_price = unit_net
+                    a.disposal_tax_treatment = tax_treatment
+                    a.disposal_tax_rate = effective_rate
+                    a.disposal_tax_amount = unit_tax
+                    a.disposal_reason = disposal_reason
+                    disposed += 1
+
+            db.session.commit()
+            flash(f'{disposed} Anlagegüter als abgegangen erfasst.', 'success')
+            return redirect(url_for('admin.assets'))
+        except Exception as e:
+            flash(f'Fehler: {str(e)}', 'error')
+
+    base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
+    settings = SiteSettings.get_settings()
+    return render_template('bundle_dispose.html',
+                           items=items,
+                           active_items=active_items,
+                           bundle_id=bundle_id,
+                           base_name=base_name,
+                           settings=settings,
+                           tax_treatment_labels=TAX_TREATMENT_LABELS,
+                           today=date.today().isoformat())
 
 
 # --- EÜR Report ---

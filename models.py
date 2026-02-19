@@ -105,6 +105,7 @@ class Asset(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(300), nullable=False)
     description = db.Column(db.Text, nullable=True)
+    bundle_id = db.Column(db.String(36), nullable=True, index=True)  # UUID grouping for bundle purchases
 
     # Purchase info
     purchase_date = db.Column(db.Date, nullable=False)

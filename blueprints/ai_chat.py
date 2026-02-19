@@ -252,14 +252,15 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_asset",
-            "description": "Create a new depreciable asset.",
+            "description": "Create a new depreciable asset. Use quantity > 1 to create a bundle of identical items (e.g. 6 lamps). The purchase_price_gross is the TOTAL price; it will be divided by quantity for each item. Each item depreciates individually.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
                     "description": {"type": "string"},
                     "purchase_date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "purchase_price_gross": {"type": "number"},
+                    "purchase_price_gross": {"type": "number", "description": "Total gross price for ALL items"},
+                    "quantity": {"type": "integer", "description": "Number of identical items (default 1). Creates a bundle when > 1."},
                     "depreciation_method": {
                         "type": "string",
                         "enum": ["sofort", "linear", "sammelposten", "degressive"],
@@ -316,13 +317,14 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "dispose_asset",
-            "description": "Record the disposal of an asset (sell, scrap, etc.).",
+            "description": "Record the disposal of one or more assets. For bundles, you can pass multiple IDs to dispose several items at once. The disposal_price_gross is the TOTAL price for all disposed items (split equally).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "integer"},
+                    "id": {"type": "integer", "description": "Single asset ID to dispose (use this OR ids, not both)"},
+                    "ids": {"type": "array", "items": {"type": "integer"}, "description": "Multiple asset IDs to dispose at once (for bundle partial disposal)"},
                     "disposal_date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "disposal_price_gross": {"type": "number", "description": "Sale price gross (0 if scrapped)"},
+                    "disposal_price_gross": {"type": "number", "description": "Total sale price gross for all items (0 if scrapped)"},
                     "disposal_reason": {
                         "type": "string",
                         "enum": ["sold", "scrapped", "private_use", "other"],
@@ -330,7 +332,7 @@ TOOL_DEFINITIONS = [
                     "disposal_tax_treatment": {"type": "string"},
                     "custom_tax_rate": {"type": "number"},
                 },
-                "required": ["id", "disposal_date", "disposal_reason"],
+                "required": ["disposal_date", "disposal_reason"],
             },
         },
     },
@@ -561,6 +563,7 @@ def _asset_to_dict(a, include_schedule=False):
         'id': a.id,
         'name': a.name,
         'description': a.description,
+        'bundle_id': a.bundle_id,
         'purchase_date': a.purchase_date.isoformat() if a.purchase_date else None,
         'purchase_price_gross': a.purchase_price_gross,
         'purchase_price_net': a.purchase_price_net,
@@ -760,29 +763,54 @@ def execute_tool(name, args):
         return _asset_to_dict(a, include_schedule=True)
 
     if name == 'create_asset':
+        import uuid as _uuid
         tax_treatment = args.get('purchase_tax_treatment', 'none')
         if settings.tax_mode == 'kleinunternehmer':
             tax_treatment = 'none'
-        gross = args['purchase_price_gross']
-        net, tax, eff_rate = _apply_tax(gross, tax_treatment, settings, args.get('custom_tax_rate'))
-        a = Asset(
-            name=args['name'],
-            description=args.get('description'),
-            purchase_date=parse_date(args['purchase_date']),
-            purchase_price_gross=gross,
-            purchase_price_net=net,
-            purchase_tax_treatment=tax_treatment,
-            purchase_tax_rate=eff_rate,
-            purchase_tax_amount=tax,
-            depreciation_method=args.get('depreciation_method', 'linear'),
-            useful_life_months=args.get('useful_life_months'),
-            salvage_value=args.get('salvage_value', 0),
-            depreciation_category_id=args.get('depreciation_category_id'),
-            notes=args.get('notes'),
-        )
-        db.session.add(a)
+        total_gross = args['purchase_price_gross']
+        quantity = max(1, args.get('quantity', 1))
+
+        # Compute per-unit prices
+        unit_gross = round(total_gross / quantity, 2) if quantity > 1 else total_gross
+        unit_net, unit_tax, eff_rate = _apply_tax(unit_gross, tax_treatment, settings, args.get('custom_tax_rate'))
+
+        bundle_id = str(_uuid.uuid4()) if quantity > 1 else None
+        base_name = args['name']
+        created = []
+
+        for i in range(quantity):
+            item_name = f"{base_name} ({i+1}/{quantity})" if quantity > 1 else base_name
+            a = Asset(
+                name=item_name,
+                description=args.get('description'),
+                bundle_id=bundle_id,
+                purchase_date=parse_date(args['purchase_date']),
+                purchase_price_gross=unit_gross,
+                purchase_price_net=unit_net,
+                purchase_tax_treatment=tax_treatment,
+                purchase_tax_rate=eff_rate,
+                purchase_tax_amount=unit_tax,
+                depreciation_method=args.get('depreciation_method', 'linear'),
+                useful_life_months=args.get('useful_life_months'),
+                salvage_value=args.get('salvage_value', 0),
+                depreciation_category_id=args.get('depreciation_category_id'),
+                notes=args.get('notes'),
+            )
+            db.session.add(a)
+            db.session.flush()
+            created.append(a)
+
         db.session.commit()
-        return {'status': 'created', 'asset': _asset_to_dict(a)}
+        if quantity > 1:
+            return {
+                'status': 'created',
+                'bundle_id': bundle_id,
+                'quantity': quantity,
+                'per_unit_gross': unit_gross,
+                'per_unit_net': unit_net,
+                'assets': [_asset_to_dict(a) for a in created],
+            }
+        return {'status': 'created', 'asset': _asset_to_dict(created[0])}
 
     if name == 'edit_asset':
         a = Asset.query.get(args['id'])
@@ -823,23 +851,49 @@ def execute_tool(name, args):
         return {'status': 'deleted', 'id': args['id']}
 
     if name == 'dispose_asset':
-        a = Asset.query.get(args['id'])
-        if not a:
-            return {'error': f"Asset {args['id']} not found"}
+        # Support single id or multiple ids
+        ids = args.get('ids', [])
+        if not ids and 'id' in args:
+            ids = [args['id']]
+        if not ids:
+            return {'error': 'Either id or ids is required'}
+
         tax_treatment = args.get('disposal_tax_treatment', 'none')
         if settings.tax_mode == 'kleinunternehmer':
             tax_treatment = 'none'
-        gross = args.get('disposal_price_gross', 0)
-        net, tax, eff_rate = _apply_tax(gross, tax_treatment, settings, args.get('custom_tax_rate'))
-        a.disposal_date = parse_date(args['disposal_date'])
-        a.disposal_price_gross = gross
-        a.disposal_price = net
-        a.disposal_tax_treatment = tax_treatment
-        a.disposal_tax_rate = eff_rate
-        a.disposal_tax_amount = tax
-        a.disposal_reason = args.get('disposal_reason', 'sold')
+        total_gross = args.get('disposal_price_gross', 0)
+
+        count = len(ids)
+        unit_gross = round(total_gross / count, 2) if count > 1 else total_gross
+        unit_net, unit_tax, eff_rate = _apply_tax(unit_gross, tax_treatment, settings, args.get('custom_tax_rate'))
+
+        disposal_date = parse_date(args['disposal_date'])
+        disposal_reason = args.get('disposal_reason', 'sold')
+
+        disposed = []
+        errors = []
+        for aid in ids:
+            a = Asset.query.get(aid)
+            if not a:
+                errors.append(f"Asset {aid} not found")
+                continue
+            if a.disposal_date:
+                errors.append(f"Asset {aid} ({a.name}) already disposed")
+                continue
+            a.disposal_date = disposal_date
+            a.disposal_price_gross = unit_gross
+            a.disposal_price = unit_net
+            a.disposal_tax_treatment = tax_treatment
+            a.disposal_tax_rate = eff_rate
+            a.disposal_tax_amount = unit_tax
+            a.disposal_reason = disposal_reason
+            disposed.append(_asset_to_dict(a))
+
         db.session.commit()
-        return {'status': 'disposed', 'asset': _asset_to_dict(a)}
+        result = {'status': 'disposed', 'count': len(disposed), 'assets': disposed}
+        if errors:
+            result['errors'] = errors
+        return result
 
     # ---- Depreciation Categories ----
     if name == 'list_depreciation_categories':
@@ -1125,6 +1179,7 @@ ARG_LABELS = {
     'display_name': 'Anzeigename', 'is_admin': 'Administrator',
     'url': 'URL', 'max_length': 'Max. Zeichen', 'query': 'Suchbegriff',
     'max_results': 'Max. Ergebnisse',
+    'quantity': 'Stückzahl', 'ids': 'IDs',
 }
 
 

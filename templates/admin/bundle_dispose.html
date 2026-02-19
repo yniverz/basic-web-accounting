@@ -1,0 +1,173 @@
+{% extends "admin/base.html" %}
+{% block title %}Bündel-Teilabgang - {{ base_name }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Bündel-Teilabgang</h1>
+    <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <div class="card-header">📦 {{ base_name }} ({{ items|length }} Stk. gesamt, {{ active_items|length }} aktiv)</div>
+
+    <form method="POST">
+        <div class="card-header">Anlagegüter auswählen</div>
+        <p class="text-muted text-sm mb-16">Wählen Sie die Anlagegüter aus, die abgehen sollen:</p>
+
+        <div class="mb-16" style="display: flex; gap: 8px;">
+            <button type="button" class="btn btn-sm btn-outline" onclick="toggleAll(true)">Alle auswählen</button>
+            <button type="button" class="btn btn-sm btn-outline" onclick="toggleAll(false)">Alle abwählen</button>
+        </div>
+
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 40px;"></th>
+                        <th>Bezeichnung</th>
+                        <th style="text-align: right;">Netto (Kauf)</th>
+                        <th style="text-align: right;">Buchwert</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for a in items %}
+                    <tr class="{{ 'text-muted' if a.disposal_date }}">
+                        <td>
+                            {% if not a.disposal_date %}
+                            <input type="checkbox" name="selected_ids" value="{{ a.id }}" checked
+                                   onchange="updateCount()">
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ a.name }}</td>
+                        <td style="text-align: right;">{{ a.purchase_price_net|currency }}</td>
+                        <td style="text-align: right;">{{ a._book_value|currency }}</td>
+                        <td>
+                            {% if a.disposal_date %}
+                            <span class="badge badge-danger">Abgegangen ({{ a.disposal_date|date_format }})</span>
+                            {% elif a._book_value <= (a.salvage_value or 0) %}
+                            <span class="badge badge-warning">Abgeschrieben</span>
+                            {% else %}
+                            <span class="badge badge-success">Aktiv</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <p class="text-sm mt-10"><strong id="selectedCount">{{ active_items|length }}</strong> ausgewählt</p>
+
+        <hr class="section-divider">
+        <div class="card-header">Abgangsdetails</div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="disposal_date">Abgangsdatum</label>
+                <input type="date" id="disposal_date" name="disposal_date" value="{{ today }}" required>
+            </div>
+            <div class="form-group">
+                <label for="disposal_reason">Grund</label>
+                <select id="disposal_reason" name="disposal_reason" required>
+                    <option value="sold">Verkauft</option>
+                    <option value="scrapped">Verschrottet / Entsorgt</option>
+                    <option value="private_use">Privatentnahme</option>
+                    <option value="other">Sonstiger Abgang</option>
+                </select>
+            </div>
+        </div>
+
+        {% if settings.tax_mode == 'regular' %}
+        <div class="form-row">
+            <div class="form-group">
+                <label for="disposal_tax_treatment">Steuerbehandlung (Verkauf)</label>
+                <select id="disposal_tax_treatment" name="disposal_tax_treatment" onchange="updateDisposalTax()">
+                    {% for key, label in tax_treatment_labels.items() %}
+                    <option value="{{ key }}">
+                        {{ label }}{% if key == 'standard' %} ({{ settings.tax_rate }}%){% elif key == 'reduced' %} ({{ settings.tax_rate_reduced }}%){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="disposal_custom_rate_group" style="display: none;">
+                <label for="disposal_custom_tax_rate">Steuersatz (%)</label>
+                <input type="number" id="disposal_custom_tax_rate" name="disposal_custom_tax_rate" step="0.1" min="0" max="100"
+                       placeholder="z.B. 5.0">
+            </div>
+        </div>
+        {% else %}
+        <input type="hidden" name="disposal_tax_treatment" value="none">
+        {% endif %}
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Eingabemodus</label>
+                <div class="d-flex gap-10">
+                    <label class="radio-label">
+                        <input type="radio" name="disposal_input_mode" value="gross" checked onchange="toggleDisposalMode()"> Brutto
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="disposal_input_mode" value="net" onchange="toggleDisposalMode()"> Netto
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" id="disposal_gross_group">
+                <label for="disposal_price_gross">Gesamter Verkaufserlös Brutto (€)</label>
+                <input type="number" id="disposal_price_gross" name="disposal_price_gross"
+                       step="0.01" min="0" value="0" placeholder="0,00">
+                <span class="text-muted text-xs mt-4 d-inline">Gesamtbetrag — wird gleichmäßig auf die ausgewählten Stücke verteilt</span>
+            </div>
+            <div class="form-group" id="disposal_net_group" style="display: none;">
+                <label for="disposal_price">Gesamter Verkaufserlös Netto (€)</label>
+                <input type="number" id="disposal_price" name="disposal_price"
+                       step="0.01" min="0" value="0" placeholder="0,00">
+                <span class="text-muted text-xs mt-4 d-inline">Gesamtbetrag — wird gleichmäßig auf die ausgewählten Stücke verteilt</span>
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-warning">Abgang erfassen</button>
+            <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleAll(checked) {
+    document.querySelectorAll('input[name="selected_ids"]').forEach(function(cb) {
+        cb.checked = checked;
+    });
+    updateCount();
+}
+
+function updateCount() {
+    var count = document.querySelectorAll('input[name="selected_ids"]:checked').length;
+    document.getElementById('selectedCount').textContent = count;
+}
+
+function updateDisposalTax() {
+    var sel = document.getElementById('disposal_tax_treatment');
+    if (!sel) return;
+    var cg = document.getElementById('disposal_custom_rate_group');
+    if (cg) cg.style.display = (sel.value === 'custom') ? '' : 'none';
+}
+
+function toggleDisposalMode() {
+    var mode = document.querySelector('input[name="disposal_input_mode"]:checked').value;
+    document.getElementById('disposal_gross_group').style.display = (mode === 'gross') ? '' : 'none';
+    document.getElementById('disposal_net_group').style.display = (mode === 'net') ? '' : 'none';
+}
+
+updateDisposalTax();
+</script>
+{% endblock %}
