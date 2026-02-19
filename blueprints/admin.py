@@ -843,6 +843,29 @@ def settings():
         settings.tax_mode = request.form.get('tax_mode', 'kleinunternehmer')
         settings.tax_rate = float(request.form.get('tax_rate', 19.0))
         settings.tax_rate_reduced = float(request.form.get('tax_rate_reduced', 7.0))
+
+        # Favicon upload
+        favicon_file = request.files.get('favicon')
+        if favicon_file and favicon_file.filename:
+            fname = secure_filename(favicon_file.filename)
+            fname = 'favicon_' + fname
+            upload_dir = current_app.config['UPLOAD_FOLDER']
+            # Remove old favicon
+            if settings.favicon_filename:
+                old_path = os.path.join(upload_dir, settings.favicon_filename)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+            favicon_file.save(os.path.join(upload_dir, fname))
+            settings.favicon_filename = fname
+
+        # Remove favicon
+        if request.form.get('remove_favicon'):
+            if settings.favicon_filename:
+                old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], settings.favicon_filename)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+                settings.favicon_filename = None
+
         db.session.commit()
         flash('Einstellungen wurden gespeichert.', 'success')
         return redirect(url_for('admin.settings'))

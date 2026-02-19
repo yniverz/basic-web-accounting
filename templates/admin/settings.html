@@ -8,7 +8,7 @@
 
 <div class="card">
     <div class="card-header">Unternehmensdaten</div>
-    <form method="POST">
+    <form method="POST" enctype="multipart/form-data">
         <div class="form-group">
             <label for="business_name">Firmenname</label>
             <input type="text" id="business_name" name="business_name"
@@ -74,6 +74,26 @@
                 <input type="number" id="tax_rate_reduced" name="tax_rate_reduced" step="0.1"
                        value="{{ settings.tax_rate_reduced or 7.0 }}" style="width: 120px;">
             </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="card-header">Favicon</div>
+
+        <div class="form-group">
+            <label>Favicon</label>
+            {% if settings.favicon_filename %}
+                <div class="mb-8">
+                    <img src="/favicon.ico" alt="Favicon" style="width: 32px; height: 32px; image-rendering: pixelated;">
+                    <br>
+                    <small class="text-muted">Aktuell: {{ settings.favicon_filename }}</small>
+                </div>
+            {% endif %}
+            <input type="file" name="favicon" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif,image/x-icon">
+            <small class="help-text">PNG, JPEG, SVG, WebP, GIF oder ICO. Wird als Browser-Tab-Icon angezeigt.</small>
+            {% if settings.favicon_filename %}
+                <label class="mt-4 font-normal"><input type="checkbox" name="remove_favicon" value="1"> Favicon entfernen</label>
+            {% endif %}
         </div>
 
         <hr class="section-divider">

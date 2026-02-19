@@ -34,6 +34,7 @@ class SiteSettings(db.Model):
     tax_mode = db.Column(db.String(20), default='kleinunternehmer')  # 'kleinunternehmer' or 'regular'
     tax_rate = db.Column(db.Float, default=19.0)  # Regelsteuersatz
     tax_rate_reduced = db.Column(db.Float, default=7.0)  # Ermäßigter Steuersatz
+    favicon_filename = db.Column(db.String(200), nullable=True)
 
     @staticmethod
     def get_settings():

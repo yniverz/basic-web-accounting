@@ -1,6 +1,5 @@
 import os
 import hashlib
-import requests
 from flask import Flask, send_file, request
 from flask_login import LoginManager
 from models import db, User, SiteSettings
@@ -68,10 +67,15 @@ def create_app():
     @app.context_processor
     def inject_globals():
         settings = SiteSettings.get_settings()
+        has_fav = bool(settings.favicon_filename)
+        fav_mime = 'image/x-icon'
+        if has_fav:
+            ext = os.path.splitext(settings.favicon_filename)[1].lower()
+            fav_mime = FAVICON_MIMETYPES.get(ext, 'image/x-icon')
         return {
             'site_settings': settings,
-            'has_favicon': _favicon_data is not None,
-            'favicon_mimetype': _favicon_mimetype,
+            'has_favicon': has_fav,
+            'favicon_mimetype': fav_mime,
         }
 
     # Template filters
@@ -110,9 +114,14 @@ def create_app():
     # Favicon
     @app.route('/favicon.ico')
     def favicon():
-        if _favicon_data:
-            from io import BytesIO
-            return send_file(BytesIO(_favicon_data), mimetype=_favicon_mimetype)
+        settings = SiteSettings.get_settings()
+        if settings.favicon_filename:
+            upload_dir = app.config['UPLOAD_FOLDER']
+            fpath = os.path.join(upload_dir, settings.favicon_filename)
+            if os.path.exists(fpath):
+                ext = os.path.splitext(settings.favicon_filename)[1].lower()
+                mime = FAVICON_MIMETYPES.get(ext, 'image/x-icon')
+                return send_file(fpath, mimetype=mime)
         return '', 204
 
     # Register blueprints
@@ -132,25 +141,17 @@ def create_app():
     return app
 
 
-# --- Favicon loading ---
-_favicon_data = None
-_favicon_mimetype = 'image/x-icon'
+# --- Favicon helpers ---
 
-
-def _load_favicon():
-    global _favicon_data, _favicon_mimetype
-    favicon_url = os.environ.get('FAVICON_URL')
-    if not favicon_url:
-        return
-    try:
-        resp = requests.get(favicon_url, timeout=10)
-        if resp.status_code == 200:
-            _favicon_data = resp.content
-            ct = resp.headers.get('Content-Type', '')
-            if ct:
-                _favicon_mimetype = ct.split(';')[0].strip()
-    except Exception:
-        pass
+FAVICON_MIMETYPES = {
+    '.ico': 'image/x-icon',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+}
 
 
 def _migrate_schema(db):
@@ -173,6 +174,7 @@ def _migrate_schema(db):
         ('assets', 'disposal_tax_treatment', 'VARCHAR(30)'),
         ('assets', 'disposal_tax_rate', 'REAL'),
         ('assets', 'disposal_tax_amount', 'REAL'),
+        ('site_settings', 'favicon_filename', 'VARCHAR(200)'),
     ]
 
     for table, column, col_type in migrations:
@@ -302,9 +304,6 @@ def _seed_defaults(app):
         db.session.add_all(default_dep_cats)
         db.session.commit()
 
-
-# Load favicon on import
-_load_favicon()
 
 # Create app
 app = create_app()
