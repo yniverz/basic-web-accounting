@@ -255,7 +255,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_asset",
-            "description": "Create a new depreciable asset. Use quantity > 1 to create a bundle of identical items (e.g. 6 lamps). The purchase_price_gross is the TOTAL price; it will be divided by quantity for each item. Each item depreciates individually. Optionally pass account_id to create a linked cash outflow transaction (not counted in EÜR).",
+            "description": "Create a new depreciable asset. Use quantity > 1 to create a bundle of identical items (e.g. 6 lamps). The purchase_price_gross is the TOTAL price; it will be divided by quantity for each item. Each item depreciates individually. You SHOULD pass account_id to create the linked cash outflow transaction (Abgangsbuchung) – this records the payment in the account balance (not counted in EÜR). Only omit account_id if the user explicitly says no payment should be booked.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -273,7 +273,7 @@ TOOL_DEFINITIONS = [
                     "depreciation_category_id": {"type": "integer"},
                     "purchase_tax_treatment": {"type": "string"},
                     "custom_tax_rate": {"type": "number"},
-                    "account_id": {"type": "integer", "description": "Account ID to book a cash outflow transaction (optional, not counted in EÜR)"},
+                    "account_id": {"type": "integer", "description": "Account ID to book the cash outflow transaction. Should normally always be provided to record the payment."},
                     "notes": {"type": "string"},
                 },
                 "required": ["name", "purchase_date", "purchase_price_gross"],
@@ -1786,7 +1786,13 @@ You can query and manipulate ALL data: categories (Buchungskategorien), transact
 assets (Anlagegüter), depreciation categories (AfA-Kategorien), business settings, and users.
 
 Accounts (Konten): Every transaction must be assigned to an account. Transfers between accounts use the create_transfer tool.
-When creating an asset, you can optionally pass account_id to book a linked cash outflow (not counted in EÜR).
+
+IMPORTANT – Asset purchases (Anlagekäufe):
+When creating an asset, you MUST always pass an account_id to book the linked cash outflow transaction (Abgangsbuchung). This ensures the payment is correctly recorded in the account balance. The outflow transaction is NOT counted in the EÜR (it is linked to the asset instead).
+- If the user specifies which account (e.g. "vom Geschäftskonto", "bar bezahlt"), use that account.
+- If only one account exists, use that one automatically.
+- If multiple accounts exist and the user did NOT specify which one, ask them first OR look up the available accounts with list_accounts and pick the most logical one (e.g. the main business account).
+- NEVER skip the account_id unless the user explicitly says the payment should not be booked.
 
 Current business settings:
 - Firmenname: {business_name}
