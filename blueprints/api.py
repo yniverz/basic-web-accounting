@@ -18,7 +18,7 @@ from helpers import (
     calculate_tax, get_tax_rate_for_treatment, parse_date,
     TAX_TREATMENT_LABELS,
 )
-from models import Category, SiteSettings, Transaction, db
+from models import Account, Category, SiteSettings, Transaction, db
 
 api_bp = Blueprint('api', __name__)
 
@@ -63,7 +63,7 @@ def _apply_tax(amount_gross, tax_treatment, settings, custom_rate=None):
 
 def _tx_to_dict(t):
     """Serialize a Transaction to a dict."""
-    return {
+    d = {
         'id': t.id,
         'date': t.date.isoformat() if t.date else None,
         'type': t.type,
@@ -75,11 +75,19 @@ def _tx_to_dict(t):
         'tax_rate': t.tax_rate,
         'category_id': t.category_id,
         'category_name': t.category.name if t.category else None,
+        'account_id': t.account_id,
+        'account_name': t.account.name if t.account else None,
         'notes': t.notes,
         'document_filename': t.document_filename,
         'created_at': t.created_at.isoformat() if t.created_at else None,
         'updated_at': t.updated_at.isoformat() if t.updated_at else None,
     }
+    if t.type == 'transfer':
+        d['transfer_to_account_id'] = t.transfer_to_account_id
+        d['transfer_to_account_name'] = t.transfer_to_account.name if t.transfer_to_account else None
+    if t.linked_asset_id:
+        d['linked_asset_id'] = t.linked_asset_id
+    return d
 
 
 def _cat_to_dict(c):
@@ -90,6 +98,18 @@ def _cat_to_dict(c):
         'type': c.type,
         'description': c.description,
         'sort_order': c.sort_order,
+    }
+
+
+def _account_to_dict(a):
+    """Serialize an Account to a dict."""
+    return {
+        'id': a.id,
+        'name': a.name,
+        'description': a.description,
+        'initial_balance': a.initial_balance,
+        'current_balance': round(a.get_balance(), 2),
+        'sort_order': a.sort_order,
     }
 
 
@@ -126,6 +146,172 @@ def list_tax_treatments():
             for k, v in TAX_TREATMENT_LABELS.items()
         ]
     })
+
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/accounts', methods=['GET'])
+@require_api_key
+def list_accounts():
+    """List all accounts with current balances."""
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
+    return jsonify({'accounts': [_account_to_dict(a) for a in accounts]})
+
+
+@api_bp.route('/accounts', methods=['POST'])
+@require_api_key
+def create_account():
+    """
+    Create a new account.
+    Body: { name, description?, initial_balance?, sort_order? }
+    """
+    data = request.get_json(force=True)
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+
+    a = Account(
+        name=name,
+        description=data.get('description'),
+        initial_balance=float(data.get('initial_balance', 0)),
+        sort_order=data.get('sort_order', 0),
+    )
+    db.session.add(a)
+    db.session.commit()
+    return jsonify({'account': _account_to_dict(a)}), 201
+
+
+@api_bp.route('/accounts/<int:account_id>', methods=['GET'])
+@require_api_key
+def get_account(account_id):
+    """Get a single account by ID with current balance."""
+    a = Account.query.get(account_id)
+    if not a:
+        return jsonify({'error': f'Account {account_id} not found'}), 404
+    return jsonify({'account': _account_to_dict(a)})
+
+
+@api_bp.route('/accounts/<int:account_id>', methods=['PUT', 'PATCH'])
+@require_api_key
+def update_account(account_id):
+    """
+    Update an account.
+    Body: { name?, description?, initial_balance?, sort_order? }
+    """
+    a = Account.query.get(account_id)
+    if not a:
+        return jsonify({'error': f'Account {account_id} not found'}), 404
+
+    data = request.get_json(force=True)
+    if 'name' in data:
+        name = data['name'].strip()
+        if not name:
+            return jsonify({'error': 'name cannot be empty'}), 400
+        a.name = name
+    if 'description' in data:
+        a.description = data['description']
+    if 'initial_balance' in data:
+        a.initial_balance = float(data['initial_balance'])
+    if 'sort_order' in data:
+        a.sort_order = data['sort_order']
+
+    db.session.commit()
+    return jsonify({'account': _account_to_dict(a)})
+
+
+@api_bp.route('/accounts/<int:account_id>', methods=['DELETE'])
+@require_api_key
+def delete_account(account_id):
+    """Delete an account. Fails if transactions reference it."""
+    a = Account.query.get(account_id)
+    if not a:
+        return jsonify({'error': f'Account {account_id} not found'}), 404
+
+    tx_count = Transaction.query.filter(
+        db.or_(Transaction.account_id == a.id, Transaction.transfer_to_account_id == a.id)
+    ).count()
+    if tx_count > 0:
+        return jsonify({'error': f'Cannot delete account with {tx_count} linked transaction(s). Move or delete them first.'}), 409
+
+    db.session.delete(a)
+    db.session.commit()
+    return jsonify({'deleted': True, 'id': account_id})
+
+
+# ---------------------------------------------------------------------------
+# Transfers
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/transfers', methods=['POST'])
+@require_api_key
+def create_transfer():
+    """
+    Create a transfer between two accounts.
+    Body: {
+        date:            "YYYY-MM-DD"  (required)
+        amount:          number         (required, > 0)
+        from_account_id: int            (required)
+        to_account_id:   int            (required)
+        description:     string         (optional)
+        notes:           string         (optional)
+    }
+    Transfers are not counted in EÜR.
+    """
+    data = request.get_json(force=True)
+
+    errors = []
+    if not data.get('date'):
+        errors.append('date is required (YYYY-MM-DD)')
+    if data.get('amount') is None:
+        errors.append('amount is required')
+    if not data.get('from_account_id'):
+        errors.append('from_account_id is required')
+    if not data.get('to_account_id'):
+        errors.append('to_account_id is required')
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    try:
+        tx_date = parse_date(data['date'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    amount = float(data['amount'])
+    if amount <= 0:
+        return jsonify({'error': 'amount must be positive'}), 400
+
+    from_id = int(data['from_account_id'])
+    to_id = int(data['to_account_id'])
+    if from_id == to_id:
+        return jsonify({'error': 'from_account_id and to_account_id must be different'}), 400
+
+    from_acc = Account.query.get(from_id)
+    if not from_acc:
+        return jsonify({'error': f'Account {from_id} not found'}), 404
+    to_acc = Account.query.get(to_id)
+    if not to_acc:
+        return jsonify({'error': f'Account {to_id} not found'}), 404
+
+    desc = data.get('description', '').strip() or f'Umbuchung {from_acc.name} → {to_acc.name}'
+
+    t = Transaction(
+        date=tx_date,
+        type='transfer',
+        description=desc,
+        amount=amount,
+        net_amount=amount,
+        tax_amount=0,
+        tax_treatment='none',
+        tax_rate=0,
+        account_id=from_id,
+        transfer_to_account_id=to_id,
+        notes=data.get('notes'),
+    )
+    db.session.add(t)
+    db.session.commit()
+    return jsonify({'transaction': _tx_to_dict(t)}), 201
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +440,18 @@ def list_transactions():
         q = q.filter(db.extract('month', Transaction.date) == month)
 
     type_filter = request.args.get('type')
-    if type_filter in ('income', 'expense'):
+    if type_filter in ('income', 'expense', 'transfer'):
         q = q.filter(Transaction.type == type_filter)
 
     cat_id = request.args.get('category_id', type=int)
     if cat_id:
         q = q.filter(Transaction.category_id == cat_id)
+
+    acc_id = request.args.get('account_id', type=int)
+    if acc_id:
+        q = q.filter(
+            db.or_(Transaction.account_id == acc_id, Transaction.transfer_to_account_id == acc_id)
+        )
 
     search = request.args.get('search', '').strip()
     if search:
@@ -304,11 +496,13 @@ def create_transaction():
         type:           "income" | "expense"   (required)
         description:    string                 (required)
         amount:         number                 (required, gross/brutto in EUR)
+        account_id:     int                    (required)
         category_id:    int                    (optional)
         tax_treatment:  string                 (optional, default "none")
         custom_tax_rate: number                (optional, only if tax_treatment="custom")
         notes:          string                 (optional)
     }
+    Note: For transfers between accounts, use POST /transfers instead.
     """
     data = request.get_json(force=True)
     settings = SiteSettings.get_settings()
@@ -323,6 +517,8 @@ def create_transaction():
         errors.append('description is required')
     if data.get('amount') is None:
         errors.append('amount is required (gross/brutto)')
+    if not data.get('account_id'):
+        errors.append('account_id is required')
     if errors:
         return jsonify({'errors': errors}), 400
 
@@ -344,6 +540,12 @@ def create_transaction():
     if settings.tax_mode == 'kleinunternehmer':
         tax_treatment = 'none'
 
+    # Validate account exists
+    account_id = int(data['account_id'])
+    acc = Account.query.get(account_id)
+    if not acc:
+        return jsonify({'error': f'Account {account_id} not found'}), 404
+
     # Validate category exists
     category_id = data.get('category_id')
     if category_id is not None:
@@ -362,6 +564,7 @@ def create_transaction():
         tax_amount=tax,
         tax_treatment=tax_treatment,
         tax_rate=eff_rate,
+        account_id=account_id,
         category_id=category_id,
         notes=data.get('notes'),
     )
@@ -391,6 +594,12 @@ def update_transaction(tx_id):
     if not t:
         return jsonify({'error': f'Transaction {tx_id} not found'}), 404
 
+    # Protect linked and transfer transactions
+    if t.linked_asset_id:
+        return jsonify({'error': 'Cannot edit a transaction linked to an asset. Manage it via the asset.'}), 409
+    if t.type == 'transfer':
+        return jsonify({'error': 'Cannot edit a transfer. Delete and recreate it.'}), 409
+
     data = request.get_json(force=True)
     settings = SiteSettings.get_settings()
 
@@ -417,6 +626,12 @@ def update_transaction(tx_id):
             if not cat:
                 return jsonify({'error': f"Category {data['category_id']} not found"}), 404
         t.category_id = data['category_id']
+
+    if 'account_id' in data:
+        acc = Account.query.get(data['account_id'])
+        if not acc:
+            return jsonify({'error': f"Account {data['account_id']} not found"}), 404
+        t.account_id = data['account_id']
 
     if 'notes' in data:
         t.notes = data['notes'] or None
@@ -448,10 +663,13 @@ def update_transaction(tx_id):
 @api_bp.route('/transactions/<int:tx_id>', methods=['DELETE'])
 @require_api_key
 def delete_transaction(tx_id):
-    """Delete a transaction by ID."""
+    """Delete a transaction by ID. Linked asset transactions cannot be deleted via this endpoint."""
     t = Transaction.query.get(tx_id)
     if not t:
         return jsonify({'error': f'Transaction {tx_id} not found'}), 404
+
+    if t.linked_asset_id:
+        return jsonify({'error': 'Cannot delete a transaction linked to an asset. Manage it via the asset.'}), 409
 
     if t.document_filename:
         import os
@@ -511,6 +729,14 @@ def bulk_create_transactions():
             if settings.tax_mode == 'kleinunternehmer':
                 tax_treatment = 'none'
 
+            # Validate account
+            if not item.get('account_id'):
+                raise ValueError('account_id is required')
+            account_id = int(item['account_id'])
+            acc = Account.query.get(account_id)
+            if not acc:
+                raise ValueError(f'Account {account_id} not found')
+
             category_id = item.get('category_id')
             if category_id is not None:
                 cat = Category.query.get(category_id)
@@ -528,6 +754,7 @@ def bulk_create_transactions():
                 tax_amount=tax,
                 tax_treatment=tax_treatment,
                 tax_rate=eff_rate,
+                account_id=account_id,
                 category_id=category_id,
                 notes=item.get('notes'),
             )
@@ -563,16 +790,19 @@ def summary():
     year = request.args.get('year', date.today().year, type=int)
     txs = Transaction.query.filter(db.extract('year', Transaction.date) == year).all()
 
-    total_income = sum(t.amount for t in txs if t.type == 'income')
-    total_expenses = sum(t.amount for t in txs if t.type == 'expense')
-    total_income_net = sum((t.net_amount or t.amount) for t in txs if t.type == 'income')
-    total_expenses_net = sum((t.net_amount or t.amount) for t in txs if t.type == 'expense')
-    total_tax_income = sum((t.tax_amount or 0) for t in txs if t.type == 'income')
-    total_tax_expenses = sum((t.tax_amount or 0) for t in txs if t.type == 'expense')
+    # EÜR-relevant transactions only (exclude transfers and linked asset transactions)
+    eur_txs = [t for t in txs if t.type in ('income', 'expense') and not t.linked_asset_id]
+
+    total_income = sum(t.amount for t in eur_txs if t.type == 'income')
+    total_expenses = sum(t.amount for t in eur_txs if t.type == 'expense')
+    total_income_net = sum((t.net_amount or t.amount) for t in eur_txs if t.type == 'income')
+    total_expenses_net = sum((t.net_amount or t.amount) for t in eur_txs if t.type == 'expense')
+    total_tax_income = sum((t.tax_amount or 0) for t in eur_txs if t.type == 'income')
+    total_tax_expenses = sum((t.tax_amount or 0) for t in eur_txs if t.type == 'expense')
 
     monthly = {}
     for m in range(1, 13):
-        mt = [t for t in txs if t.date.month == m]
+        mt = [t for t in eur_txs if t.date.month == m]
         inc = sum(t.amount for t in mt if t.type == 'income')
         exp = sum(t.amount for t in mt if t.type == 'expense')
         monthly[str(m)] = {
@@ -580,6 +810,9 @@ def summary():
             'expenses': round(exp, 2),
             'profit': round(inc - exp, 2),
         }
+
+    # Account balances
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
 
     return jsonify({
         'year': year,
@@ -593,4 +826,5 @@ def summary():
         'vat_payable': round(total_tax_income - total_tax_expenses, 2),
         'transaction_count': len(txs),
         'monthly': monthly,
+        'accounts': [_account_to_dict(a) for a in accounts],
     })
