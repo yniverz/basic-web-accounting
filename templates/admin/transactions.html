@@ -1,0 +1,127 @@
+{% extends "admin/base.html" %}
+{% block title %}Buchungen - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Buchungen</h1>
+    <a href="{{ url_for('admin.transaction_new') }}" class="btn btn-primary">+ Neue Buchung</a>
+</div>
+
+<!-- Filters -->
+<div class="filter-bar">
+    <form method="GET" class="d-flex gap-12 align-end flex-wrap w-full">
+        <div class="form-group">
+            <label for="year">Jahr</label>
+            <select name="year" id="year" style="width: auto;">
+                {% for y in years %}
+                <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="month">Monat</label>
+            <select name="month" id="month" style="width: auto;">
+                <option value="0">Alle</option>
+                {% for m_id, m_name in months.items() %}
+                <option value="{{ m_id }}" {{ 'selected' if m_id == month }}>{{ m_name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="type">Typ</label>
+            <select name="type" id="type" style="width: auto;">
+                <option value="">Alle</option>
+                <option value="income" {{ 'selected' if type_filter == 'income' }}>Einnahmen</option>
+                <option value="expense" {{ 'selected' if type_filter == 'expense' }}>Ausgaben</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="category">Kategorie</label>
+            <select name="category" id="category" style="width: auto;">
+                <option value="0">Alle</option>
+                {% for c in categories %}
+                <option value="{{ c.id }}" {{ 'selected' if c.id == category_id }}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn">Filtern</button>
+        </div>
+    </form>
+</div>
+
+<!-- Summary -->
+<div class="stats-grid">
+    <div class="stat-card stat-success">
+        <div class="stat-label">Einnahmen (gefiltert)</div>
+        <div class="stat-value text-success">{{ total_income|currency }}</div>
+    </div>
+    <div class="stat-card stat-danger">
+        <div class="stat-label">Ausgaben (gefiltert)</div>
+        <div class="stat-value text-danger">{{ total_expenses|currency }}</div>
+    </div>
+</div>
+
+<!-- Transactions Table -->
+{% if transactions %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Datum</th>
+                    <th>Beschreibung</th>
+                    <th>Kategorie</th>
+                    <th>Typ</th>
+                    <th style="text-align: right;">Betrag</th>
+                    <th>Beleg</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in transactions %}
+                <tr>
+                    <td>{{ t.date|date_format }}</td>
+                    <td>
+                        {{ t.description }}
+                        {% if t.notes %}
+                        <br><span class="text-muted text-sm">{{ t.notes[:80] }}{{ '...' if t.notes|length > 80 }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ t.category.name if t.category else '–' }}</td>
+                    <td>
+                        {% if t.type == 'income' %}
+                        <span class="badge badge-income">Einnahme</span>
+                        {% else %}
+                        <span class="badge badge-expense">Ausgabe</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right; white-space: nowrap;">{{ t.amount|currency }}</td>
+                    <td>
+                        {% if t.document_filename %}
+                        <a href="{{ url_for('admin.uploaded_file', filename=t.document_filename) }}" target="_blank" class="text-accent text-sm">📎 Beleg</a>
+                        {% else %}
+                        <span class="text-muted text-sm">–</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('admin.transaction_edit', id=t.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('admin.transaction_delete', id=t.id) }}" onsubmit="return confirm('Buchung wirklich löschen?')">
+                                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card empty-state">
+    <p>Keine Buchungen gefunden.</p>
+    <a href="{{ url_for('admin.transaction_new') }}" class="btn btn-primary mt-16">Neue Buchung erstellen</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "admin/base.html" %}
+{% block title %}AfA-Kategorien - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>AfA-Kategorien</h1>
+    <a href="{{ url_for('admin.depreciation_category_new') }}" class="btn btn-primary">+ Neue Kategorie</a>
+</div>
+
+<div class="card">
+    <div class="card-header">Definierte Kategorien</div>
+    <p class="text-muted text-sm mb-16" style="padding: 0 16px;">
+        AfA-Kategorien definieren Standardwerte für Nutzungsdauer und Abschreibungsmethode.
+        Beim Anlegen eines Anlageguts kann eine Kategorie ausgewählt werden, um die Werte automatisch zu übernehmen.
+    </p>
+
+    {% if categories %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Bezeichnung</th>
+                    <th>Nutzungsdauer</th>
+                    <th>Standard-Methode</th>
+                    <th>Anlagegüter</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cat in categories %}
+                <tr>
+                    <td>
+                        <span class="font-semibold">{{ cat.name }}</span>
+                        {% if cat.description %}
+                        <br><span class="text-muted text-sm">{{ cat.description }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ cat.useful_life_months }} Monate ({{ (cat.useful_life_months / 12)|round(1) }} J.)</td>
+                    <td><span class="text-sm">{{ methods.get(cat.default_method, cat.default_method) }}</span></td>
+                    <td>{{ cat.assets|length }}</td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('admin.depreciation_category_edit', id=cat.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('admin.depreciation_category_delete', id=cat.id) }}"
+                                  onsubmit="return confirm('Kategorie wirklich löschen? Zugeordnete Anlagegüter verlieren die Kategorie-Zuordnung.')">
+                                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>Keine AfA-Kategorien definiert.</p>
+        <a href="{{ url_for('admin.depreciation_category_new') }}" class="btn btn-primary mt-16">Erste Kategorie anlegen</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

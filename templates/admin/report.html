@@ -1,0 +1,255 @@
+{% extends "admin/base.html" %}
+{% block title %}EÜR-Bericht {{ year }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>EÜR-Bericht {{ year }}</h1>
+    <div class="d-flex gap-10 align-center">
+        <form method="GET" class="d-flex align-center gap-10">
+            <select name="year" onchange="this.form.submit()" style="width: auto;">
+                {% for y in years %}
+                <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <button onclick="window.print()" class="btn btn-outline no-print">🖨 Drucken</button>
+    </div>
+</div>
+
+<!-- Business Info -->
+<div class="card mb-20">
+    <div class="card-header">{{ settings.business_name }}</div>
+    <p class="text-muted text-sm">
+        Einnahme-Überschuss-Rechnung für das Geschäftsjahr {{ year }}
+        {% if settings.tax_mode == 'kleinunternehmer' %}
+        <br>Kleinunternehmerregelung gem. § 19 UStG – keine Umsatzsteuer ausgewiesen
+        {% endif %}
+        {% if settings.tax_number %}
+        <br>Steuernummer: {{ settings.tax_number }}
+        {% endif %}
+    </p>
+</div>
+
+<!-- Income -->
+<div class="card">
+    <div class="card-header text-success">Betriebseinnahmen</div>
+    {% if income_by_category %}
+    <table>
+        <thead>
+            <tr>
+                <th>Kategorie</th>
+                <th style="text-align: center;">Anzahl</th>
+                <th style="text-align: right;">Betrag (Brutto)</th>
+                {% if settings.tax_mode == 'regular' %}
+                <th style="text-align: right;">Netto</th>
+                <th style="text-align: right;">USt.</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, data in income_by_category.items() %}
+            <tr>
+                <td>{{ name }}</td>
+                <td style="text-align: center;">{{ data.count }}</td>
+                <td style="text-align: right;">{{ data.gross|currency }}</td>
+                {% if settings.tax_mode == 'regular' %}
+                <td style="text-align: right;">{{ data.net|currency }}</td>
+                <td style="text-align: right;">{{ data.tax|currency }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Keine Einnahmen in {{ year }}</div>
+    {% endif %}
+
+    {# Disposal gains #}
+    {% if disposal_items %}
+    <div class="mt-16">
+        <div class="text-muted text-sm font-semibold mb-8" style="padding: 0 16px;">Veräußerungserlöse aus Anlagegütern</div>
+        <table>
+            <tbody>
+                {% for item in disposal_items if item.type == 'gain' %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td></td>
+                    <td style="text-align: right;">{{ item.amount|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="price-summary mt-16">
+        {% if total_income_transactions != total_income %}
+        <div class="price-row">
+            <span>Einnahmen aus Buchungen</span>
+            <span>{{ total_income_transactions|currency }}</span>
+        </div>
+        {% if disposal_gains > 0 %}
+        <div class="price-row">
+            <span>Veräußerungsgewinne</span>
+            <span>{{ disposal_gains|currency }}</span>
+        </div>
+        {% endif %}
+        {% endif %}
+        <div class="price-row total">
+            <span>Summe Einnahmen</span>
+            <span class="text-success">{{ total_income|currency }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- Expenses -->
+<div class="card">
+    <div class="card-header text-danger">Betriebsausgaben</div>
+    {% if expense_by_category %}
+    <table>
+        <thead>
+            <tr>
+                <th>Kategorie</th>
+                <th style="text-align: center;">Anzahl</th>
+                <th style="text-align: right;">Betrag (Brutto)</th>
+                {% if settings.tax_mode == 'regular' %}
+                <th style="text-align: right;">Netto</th>
+                <th style="text-align: right;">Vorsteuer</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, data in expense_by_category.items() %}
+            <tr>
+                <td>{{ name }}</td>
+                <td style="text-align: center;">{{ data.count }}</td>
+                <td style="text-align: right;">{{ data.gross|currency }}</td>
+                {% if settings.tax_mode == 'regular' %}
+                <td style="text-align: right;">{{ data.net|currency }}</td>
+                <td style="text-align: right;">{{ data.tax|currency }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Keine Ausgaben (Buchungen) in {{ year }}</div>
+    {% endif %}
+
+    {# Depreciation (AfA) #}
+    {% if depreciation_by_method %}
+    <div class="mt-16">
+        <div class="text-muted text-sm font-semibold mb-8" style="padding: 0 16px;">Abschreibungen (AfA)</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>AfA-Methode</th>
+                    <th style="text-align: center;">Anlagegüter</th>
+                    <th style="text-align: right;">AfA-Betrag</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for method_label, data in depreciation_by_method.items() %}
+                <tr>
+                    <td>{{ method_label }}</td>
+                    <td style="text-align: center;">{{ data.count }}</td>
+                    <td style="text-align: right;">{{ data.amount|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    {# Disposal losses #}
+    {% if disposal_items %}
+    {% set loss_items = disposal_items|selectattr('type', 'eq', 'loss')|list %}
+    {% if loss_items %}
+    <div class="mt-16">
+        <div class="text-muted text-sm font-semibold mb-8" style="padding: 0 16px;">Veräußerungsverluste</div>
+        <table>
+            <tbody>
+                {% for item in loss_items %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td></td>
+                    <td style="text-align: right;">{{ item.amount|abs|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <div class="price-summary mt-16">
+        {% if total_depreciation > 0 or disposal_losses > 0 %}
+        <div class="price-row">
+            <span>Ausgaben aus Buchungen</span>
+            <span>{{ total_expenses_transactions|currency }}</span>
+        </div>
+        {% if total_depreciation > 0 %}
+        <div class="price-row">
+            <span>Abschreibungen (AfA)</span>
+            <span>{{ total_depreciation|currency }}</span>
+        </div>
+        {% endif %}
+        {% if disposal_losses > 0 %}
+        <div class="price-row">
+            <span>Veräußerungsverluste</span>
+            <span>{{ disposal_losses|currency }}</span>
+        </div>
+        {% endif %}
+        {% endif %}
+        <div class="price-row total">
+            <span>Summe Ausgaben</span>
+            <span class="text-danger">{{ total_expenses|currency }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- Result -->
+<div class="card">
+    <div class="card-header">Ergebnis</div>
+    <div class="price-summary">
+        <div class="price-row">
+            <span>Betriebseinnahmen (Buchungen)</span>
+            <span>{{ total_income_transactions|currency }}</span>
+        </div>
+        {% if disposal_gains > 0 %}
+        <div class="price-row">
+            <span>+ Veräußerungsgewinne</span>
+            <span>{{ disposal_gains|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="price-row">
+            <span><strong>Summe Einnahmen</strong></span>
+            <span class="text-success"><strong>{{ total_income|currency }}</strong></span>
+        </div>
+        <div class="price-row">
+            <span>Betriebsausgaben (Buchungen)</span>
+            <span>{{ total_expenses_transactions|currency }}</span>
+        </div>
+        {% if total_depreciation > 0 %}
+        <div class="price-row">
+            <span>+ Abschreibungen (AfA)</span>
+            <span>{{ total_depreciation|currency }}</span>
+        </div>
+        {% endif %}
+        {% if disposal_losses > 0 %}
+        <div class="price-row">
+            <span>+ Veräußerungsverluste</span>
+            <span>{{ disposal_losses|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="price-row">
+            <span><strong>Summe Ausgaben</strong></span>
+            <span class="text-danger"><strong>– {{ total_expenses|currency }}</strong></span>
+        </div>
+        <div class="price-row total">
+            <span>Gewinn / Verlust</span>
+            <span class="{{ 'text-success' if profit >= 0 else 'text-danger' }}">{{ profit|currency }}</span>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,91 @@
+{% extends "admin/base.html" %}
+{% block title %}Anlagegüter - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Anlagegüter</h1>
+    <a href="{{ url_for('admin.asset_new') }}" class="btn btn-primary">+ Neues Anlagegut</a>
+</div>
+
+<!-- Filter -->
+<div class="actions-bar">
+    <a href="{{ url_for('admin.assets', status='active') }}"
+       class="btn {{ 'btn-primary' if status_filter == 'active' else 'btn-outline' }} btn-sm">Aktiv</a>
+    <a href="{{ url_for('admin.assets', status='disposed') }}"
+       class="btn {{ 'btn-primary' if status_filter == 'disposed' else 'btn-outline' }} btn-sm">Abgegangen</a>
+    <a href="{{ url_for('admin.assets', status='all') }}"
+       class="btn {{ 'btn-primary' if status_filter == 'all' else 'btn-outline' }} btn-sm">Alle</a>
+</div>
+
+<!-- Summary -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Anschaffungskosten (Netto)</div>
+        <div class="stat-value">{{ total_purchase|currency }}</div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Aktueller Buchwert (aktive)</div>
+        <div class="stat-value">{{ total_book_value|currency }}</div>
+    </div>
+    <div class="stat-card stat-muted">
+        <div class="stat-label">Anzahl</div>
+        <div class="stat-value">{{ assets|length }}</div>
+    </div>
+</div>
+
+<!-- Assets Table -->
+{% if assets %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Bezeichnung</th>
+                    <th>Anschaffung</th>
+                    <th>AfA-Methode</th>
+                    <th style="text-align: right;">Anschaffungskosten</th>
+                    <th style="text-align: right;">Buchwert</th>
+                    <th>Status</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in assets %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
+                            {{ a.name }}
+                        </a>
+                        {% if a.description %}
+                        <br><span class="text-muted text-sm">{{ a.description[:60] }}{{ '...' if a.description|length > 60 }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ a.purchase_date|date_format }}</td>
+                    <td><span class="text-sm">{{ methods.get(a.depreciation_method, a.depreciation_method) }}</span></td>
+                    <td style="text-align: right;">{{ a.purchase_price_net|currency }}</td>
+                    <td style="text-align: right;">{{ a._book_value|currency }}</td>
+                    <td>
+                        {% if a.disposal_date %}
+                        <span class="badge badge-danger">Abgegangen</span>
+                        {% elif a._book_value <= (a.salvage_value or 0) %}
+                        <span class="badge badge-warning">Abgeschrieben</span>
+                        {% else %}
+                        <span class="badge badge-success">Aktiv</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('admin.asset_detail', id=a.id) }}" class="btn btn-sm btn-outline">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card empty-state">
+    <p>Keine Anlagegüter gefunden.</p>
+    <a href="{{ url_for('admin.asset_new') }}" class="btn btn-primary mt-16">Erstes Anlagegut anlegen</a>
+</div>
+{% endif %}
+{% endblock %}

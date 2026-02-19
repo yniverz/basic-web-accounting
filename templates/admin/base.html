@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light dark">
+    <title>{% block title %}{{ site_settings.business_name or 'Buchhaltung' }}{% endblock %}</title>
+    {% if has_favicon %}
+    <link rel="icon" href="/favicon.ico" type="{{ favicon_mimetype }}">
+    {% endif %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="{{ url_for('serve_static', filename='css/variables_light.css') }}" media="(prefers-color-scheme: light)">
+    <link rel="stylesheet" href="{{ url_for('serve_static', filename='css/variables_dark.css') }}" media="(prefers-color-scheme: dark)">
+    <link rel="stylesheet" href="{{ url_for('serve_static', filename='css/common.css') }}">
+    <link rel="stylesheet" href="{{ url_for('serve_static', filename='css/admin.css') }}">
+    <link rel="stylesheet" href="{{ url_for('serve_static', filename='css/admin-components.css') }}">
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <nav>
+        <div class="nav-inner">
+            <a href="{{ url_for('admin.dashboard') }}" class="nav-brand">{{ site_settings.business_name or 'Firmen' }} Buchhaltung</a>
+            <button class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menü">☰</button>
+            <div class="nav-links">
+                <a href="{{ url_for('admin.dashboard') }}" class="{{ 'active' if request.endpoint == 'admin.dashboard' }}">Dashboard</a>
+
+                <div class="nav-dropdown">
+                    <a class="nav-dropdown-toggle {{ 'active' if request.endpoint and ('transaction' in request.endpoint or request.endpoint == 'admin.report') }}">Buchhaltung</a>
+                    <div class="nav-dropdown-menu">
+                        <a href="{{ url_for('admin.transactions') }}" class="{{ 'active' if request.endpoint and 'transaction' in request.endpoint }}">Buchungen</a>
+                        <a href="{{ url_for('admin.report') }}" class="{{ 'active' if request.endpoint == 'admin.report' }}">EÜR-Bericht</a>
+                    </div>
+                </div>
+
+                <div class="nav-dropdown">
+                    <a class="nav-dropdown-toggle {{ 'active' if request.endpoint and ('categor' in request.endpoint or 'asset' in request.endpoint or 'depreciation' in request.endpoint) }}">Stammdaten</a>
+                    <div class="nav-dropdown-menu">
+                        <a href="{{ url_for('admin.categories') }}" class="{{ 'active' if request.endpoint and 'categor' in request.endpoint and 'depreciation' not in request.endpoint }}">Buchungskategorien</a>
+                        <a href="{{ url_for('admin.assets') }}" class="{{ 'active' if request.endpoint and 'asset' in request.endpoint }}">Anlagegüter</a>
+                        <a href="{{ url_for('admin.depreciation_categories') }}" class="{{ 'active' if request.endpoint and 'depreciation' in request.endpoint }}">AfA-Kategorien</a>
+                    </div>
+                </div>
+
+                {% if current_user.is_admin %}
+                <div class="nav-dropdown">
+                    <a class="nav-dropdown-toggle {{ 'active' if request.endpoint and ('user' in request.endpoint or request.endpoint == 'admin.settings') }}">Verwaltung</a>
+                    <div class="nav-dropdown-menu">
+                        <a href="{{ url_for('admin.users') }}" class="{{ 'active' if request.endpoint and 'user' in request.endpoint }}">Benutzer</a>
+                        <a href="{{ url_for('admin.settings') }}" class="{{ 'active' if request.endpoint == 'admin.settings' }}">Einstellungen</a>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            <div class="nav-right">
+                <a href="{{ url_for('auth.profile') }}">{{ current_user.display_name or current_user.username }}</a>
+                <a href="{{ url_for('auth.logout') }}" class="btn-logout">Abmelden</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    {% block extra_js %}{% endblock %}
+
+    <script>
+        // Dropdown toggle for mobile
+        document.querySelectorAll('.nav-dropdown-toggle').forEach(function(toggle) {
+            toggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var dropdown = this.closest('.nav-dropdown');
+                // Close all other dropdowns
+                document.querySelectorAll('.nav-dropdown').forEach(function(d) {
+                    if (d !== dropdown) d.classList.remove('open');
+                });
+                dropdown.classList.toggle('open');
+            });
+        });
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.nav-dropdown')) {
+                document.querySelectorAll('.nav-dropdown').forEach(function(d) {
+                    d.classList.remove('open');
+                });
+            }
+        });
+
+        // Scroll position persistence
+        (function() {
+            var key = 'scroll_' + window.location.pathname;
+            window.addEventListener('load', function() {
+                var saved = localStorage.getItem(key);
+                if (saved) window.scrollTo(0, parseInt(saved));
+            });
+            window.addEventListener('beforeunload', function() {
+                localStorage.setItem(key, window.scrollY);
+            });
+        })();
+    </script>
+</body>
+</html>

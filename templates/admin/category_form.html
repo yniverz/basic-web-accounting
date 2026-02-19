@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'Kategorie bearbeiten' if category else 'Neue Kategorie' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'Kategorie bearbeiten' if category else 'Neue Kategorie' }}</h1>
+    <a href="{{ url_for('admin.categories') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name"
+                       value="{{ category.name if category else '' }}" required
+                       placeholder="z.B. Bürobedarf">
+            </div>
+            <div class="form-group">
+                <label for="type">Typ</label>
+                <select id="type" name="type" required>
+                    <option value="income" {{ 'selected' if category and category.type == 'income' }}>Einnahme</option>
+                    <option value="expense" {{ 'selected' if not category or category.type == 'expense' }}>Ausgabe</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Beschreibung</label>
+            <input type="text" id="description" name="description"
+                   value="{{ category.description if category and category.description else '' }}"
+                   placeholder="Optionale Beschreibung">
+        </div>
+
+        <div class="form-group">
+            <label for="sort_order">Sortierung</label>
+            <input type="number" id="sort_order" name="sort_order"
+                   value="{{ category.sort_order if category else 0 }}"
+                   style="width: 120px;">
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-primary">
+                {{ 'Speichern' if category else 'Kategorie erstellen' }}
+            </button>
+            <a href="{{ url_for('admin.categories') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

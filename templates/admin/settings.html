@@ -1,0 +1,73 @@
+{% extends "admin/base.html" %}
+{% block title %}Einstellungen - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Einstellungen</h1>
+</div>
+
+<div class="card">
+    <div class="card-header">Unternehmensdaten</div>
+    <form method="POST">
+        <div class="form-group">
+            <label for="business_name">Firmenname</label>
+            <input type="text" id="business_name" name="business_name"
+                   value="{{ settings.business_name }}" required>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="address_lines">Adresse</label>
+                <textarea id="address_lines" name="address_lines" rows="3"
+                          placeholder="Straße Nr.&#10;PLZ Ort">{{ settings.address_lines or '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="contact_lines">Kontakt</label>
+                <textarea id="contact_lines" name="contact_lines" rows="3"
+                          placeholder="Tel: ...&#10;E-Mail: ...">{{ settings.contact_lines or '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="bank_lines">Bankverbindung</label>
+                <textarea id="bank_lines" name="bank_lines" rows="3"
+                          placeholder="IBAN: ...&#10;BIC: ...&#10;Bank: ...">{{ settings.bank_lines or '' }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="tax_number">Steuernummer</label>
+                <input type="text" id="tax_number" name="tax_number"
+                       value="{{ settings.tax_number or '' }}"
+                       placeholder="z.B. 12/345/67890">
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="card-header">Steuer-Einstellungen</div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="tax_mode">Besteuerungsart</label>
+                <select id="tax_mode" name="tax_mode">
+                    <option value="kleinunternehmer" {{ 'selected' if settings.tax_mode == 'kleinunternehmer' }}>
+                        Kleinunternehmer (§ 19 UStG)
+                    </option>
+                    <option value="regular" {{ 'selected' if settings.tax_mode == 'regular' }}>
+                        Regelbesteuerung
+                    </option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="tax_rate">Umsatzsteuersatz (%)</label>
+                <input type="number" id="tax_rate" name="tax_rate" step="0.1"
+                       value="{{ settings.tax_rate }}" style="width: 120px;">
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'AfA-Kategorie bearbeiten' if category else 'Neue AfA-Kategorie' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'AfA-Kategorie bearbeiten' if category else 'Neue AfA-Kategorie' }}</h1>
+    <a href="{{ url_for('admin.depreciation_categories') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST">
+        <div class="form-group">
+            <label for="name">Bezeichnung</label>
+            <input type="text" id="name" name="name"
+                   value="{{ category.name if category else '' }}" required
+                   placeholder="z.B. Computer / IT-Hardware, Büromöbel, Pkw">
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="useful_life_months">Nutzungsdauer (Monate)</label>
+                <input type="number" id="useful_life_months" name="useful_life_months"
+                       min="1" required
+                       value="{{ category.useful_life_months if category else '' }}"
+                       placeholder="z.B. 36">
+                <span class="text-muted text-xs mt-4 d-inline">Gemäß amtlicher AfA-Tabelle</span>
+            </div>
+            <div class="form-group">
+                <label for="default_method">Standard AfA-Methode</label>
+                <select id="default_method" name="default_method">
+                    {% for key, label in methods.items() %}
+                    <option value="{{ key }}"
+                            {{ 'selected' if category and category.default_method == key else ('selected' if not category and key == 'linear') }}>
+                        {{ label }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="description">Beschreibung (optional)</label>
+                <input type="text" id="description" name="description"
+                       value="{{ category.description if category and category.description else '' }}"
+                       placeholder="z.B. Laptops, Desktop-PCs, Server">
+            </div>
+            <div class="form-group">
+                <label for="sort_order">Sortierung</label>
+                <input type="number" id="sort_order" name="sort_order"
+                       value="{{ category.sort_order if category else 0 }}"
+                       min="0">
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-primary">
+                {{ 'Speichern' if category else 'Kategorie erstellen' }}
+            </button>
+            <a href="{{ url_for('admin.depreciation_categories') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

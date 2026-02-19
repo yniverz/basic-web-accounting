@@ -1,0 +1,66 @@
+/* ===== Modal / Overlay ===== */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal-dialog {
+    background: var(--bg-card);
+    padding: 24px;
+    border-radius: var(--radius-lg);
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.modal-dialog h3 {
+    margin-bottom: 16px;
+    font-size: 1.15em;
+}
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+/* ===== Autocomplete ===== */
+.autocomplete-wrapper { position: relative; }
+.autocomplete-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 50;
+    box-shadow: var(--shadow-md);
+}
+.autocomplete-list .autocomplete-item {
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 0.9em;
+}
+.autocomplete-list .autocomplete-item:hover,
+.autocomplete-list .autocomplete-item.highlighted {
+    background: var(--color-accent-light);
+    color: var(--color-accent);
+}
+
+/* ===== Expense Cards ===== */
+.expense-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    background: var(--bg-muted);
+}

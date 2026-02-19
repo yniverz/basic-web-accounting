@@ -1,0 +1,216 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ asset.name }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ asset.name }}</h1>
+    <div class="d-flex gap-10">
+        <a href="{{ url_for('admin.asset_edit', id=asset.id) }}" class="btn btn-outline">Bearbeiten</a>
+        {% if not asset.disposal_date %}
+        <a href="{{ url_for('admin.asset_dispose', id=asset.id) }}" class="btn btn-warning">Abgang erfassen</a>
+        {% endif %}
+        <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
+    </div>
+</div>
+
+<!-- Status + Key Info -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Anschaffungskosten (Netto)</div>
+        <div class="stat-value">{{ asset.purchase_price_net|currency }}</div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Aktueller Buchwert</div>
+        <div class="stat-value">{{ book_value|currency }}</div>
+    </div>
+    <div class="stat-card {{ 'stat-danger' if asset.disposal_date else 'stat-muted' }}">
+        <div class="stat-label">Status</div>
+        <div class="stat-value text-sm" style="font-size: 1.2em;">
+            {% if asset.disposal_date %}
+                Abgegangen ({{ asset.disposal_date|date_format }})
+            {% elif book_value <= (asset.salvage_value or 0) %}
+                Vollständig abgeschrieben
+            {% else %}
+                Aktiv
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Details Card -->
+<div class="card">
+    <div class="card-header">Stammdaten</div>
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Bezeichnung</div>
+            <div class="font-semibold">{{ asset.name }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Beschreibung</div>
+            <div>{{ asset.description or '–' }}</div>
+        </div>
+    </div>
+    <hr class="section-divider">
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Anschaffungsdatum</div>
+            <div>{{ asset.purchase_date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">AfA-Methode</div>
+            <div>{{ methods.get(asset.depreciation_method, asset.depreciation_method) }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Kaufpreis Brutto</div>
+            <div>{{ asset.purchase_price_gross|currency }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Kaufpreis Netto (AfA-Basis)</div>
+            <div>{{ asset.purchase_price_net|currency }}</div>
+        </div>
+    </div>
+    {% if asset.useful_life_months %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Nutzungsdauer</div>
+            <div>{{ asset.useful_life_months }} Monate ({{ (asset.useful_life_months / 12)|round(1) }} Jahre)</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Erinnerungswert</div>
+            <div>{{ (asset.salvage_value or 0)|currency }}</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if asset.depreciation_category %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">AfA-Kategorie</div>
+        <div>{{ asset.depreciation_category.name }}</div>
+    </div>
+    {% endif %}
+    {% if asset.document_filename %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Beleg</div>
+        <a href="{{ url_for('admin.uploaded_file', filename=asset.document_filename) }}" target="_blank" class="text-accent">📎 {{ asset.document_filename }}</a>
+    </div>
+    {% endif %}
+    {% if asset.notes %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Notizen</div>
+        <div>{{ asset.notes }}</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Disposal Info -->
+{% if asset.disposal_date %}
+<div class="card">
+    <div class="card-header text-danger">Abgang</div>
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Abgangsdatum</div>
+            <div>{{ asset.disposal_date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Grund</div>
+            <div>
+                {% if asset.disposal_reason == 'sold' %}Verkauft
+                {% elif asset.disposal_reason == 'scrapped' %}Verschrottet / Entsorgt
+                {% elif asset.disposal_reason == 'private_use' %}Privatentnahme
+                {% else %}Sonstiger Abgang{% endif %}
+            </div>
+        </div>
+    </div>
+    {% if disposal_result %}
+    <div class="price-summary mt-16">
+        {% if not disposal_result.is_sammelposten %}
+        <div class="price-row">
+            <span>Buchwert bei Abgang</span>
+            <span>{{ disposal_result.book_value_at_disposal|currency }}</span>
+        </div>
+        {% endif %}
+        {% if asset.disposal_price_gross and asset.disposal_price_gross != asset.disposal_price %}
+        <div class="price-row">
+            <span>Verkaufserlös (Brutto)</span>
+            <span>{{ asset.disposal_price_gross|currency }}</span>
+        </div>
+        <div class="price-row">
+            <span>Verkaufserlös (Netto)</span>
+            <span>{{ disposal_result.disposal_price|currency }}</span>
+        </div>
+        {% else %}
+        <div class="price-row">
+            <span>Verkaufserlös</span>
+            <span>{{ disposal_result.disposal_price|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="price-row total">
+            <span>{{ 'Veräußerungsgewinn' if disposal_result.is_gain else 'Veräußerungsverlust' }}</span>
+            <span class="{{ 'text-success' if disposal_result.is_gain else 'text-danger' }}">
+                {{ disposal_result.gain_or_loss|currency }}
+            </span>
+        </div>
+        {% if disposal_result.is_sammelposten %}
+        <div class="mt-10 text-muted text-sm">
+            ℹ Sammelposten: Abschreibung wird gem. § 6 Abs. 2a Satz 3 EStG unverändert fortgesetzt.
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+    <div class="mt-16 d-flex gap-10">
+        <a href="{{ url_for('admin.asset_dispose', id=asset.id) }}" class="btn btn-sm btn-outline">Abgang bearbeiten</a>
+        <form method="POST" action="{{ url_for('admin.asset_undispose', id=asset.id) }}"
+              onsubmit="return confirm('Abgang wirklich rückgängig machen?')">
+            <button type="submit" class="btn btn-sm btn-outline">Abgang rückgängig machen</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<!-- Depreciation Schedule -->
+<div class="card">
+    <div class="card-header">Abschreibungsplan</div>
+    {% if schedule %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Jahr</th>
+                    <th style="text-align: right;">AfA-Betrag</th>
+                    <th style="text-align: right;">Kumuliert</th>
+                    <th style="text-align: right;">Buchwert</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in schedule %}
+                <tr class="{{ 'font-semibold' if entry.year == current_year }}">
+                    <td>
+                        {{ entry.year }}
+                        {% if entry.year == current_year %}
+                        <span class="badge badge-info">aktuell</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right;">{{ entry.amount|currency }}</td>
+                    <td style="text-align: right;">{{ entry.cumulative|currency }}</td>
+                    <td style="text-align: right;">{{ entry.book_value|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Keine Abschreibungsdaten vorhanden.</div>
+    {% endif %}
+</div>
+
+<!-- Delete -->
+<div class="card">
+    <div class="card-header text-danger">Gefahrenzone</div>
+    <p class="text-muted text-sm mb-16">Das Löschen eines Anlageguts kann nicht rückgängig gemacht werden.</p>
+    <form method="POST" action="{{ url_for('admin.asset_delete', id=asset.id) }}"
+          onsubmit="return confirm('Anlagegut wirklich unwiderruflich löschen?')">
+        <button type="submit" class="btn btn-danger">Anlagegut löschen</button>
+    </form>
+</div>
+{% endblock %}

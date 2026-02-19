@@ -1,0 +1,16 @@
+services:
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=change-me-to-a-secure-random-string
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=password123
+      # - FAVICON_URL=https://example.com/favicon.ico
+    volumes:
+      - app_data:/app/instance
+    restart: unless-stopped
+
+volumes:
+  app_data:

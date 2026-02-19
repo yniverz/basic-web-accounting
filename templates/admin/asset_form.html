@@ -1,0 +1,210 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'Anlagegut bearbeiten' if asset else 'Neues Anlagegut' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'Anlagegut bearbeiten' if asset else 'Neues Anlagegut' }}</h1>
+    <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST" enctype="multipart/form-data">
+        <div class="card-header">Grunddaten</div>
+
+        <div class="form-group">
+            <label for="name">Bezeichnung</label>
+            <input type="text" id="name" name="name"
+                   value="{{ asset.name if asset else '' }}" required
+                   placeholder="z.B. MacBook Pro, Bürostuhl, Drucker">
+        </div>
+
+        <div class="form-group">
+            <label for="description">Beschreibung</label>
+            <input type="text" id="description" name="description"
+                   value="{{ asset.description if asset and asset.description else '' }}"
+                   placeholder="Optionale Details (Seriennummer, Modell, etc.)">
+        </div>
+
+        <hr class="section-divider">
+        <div class="card-header">Anschaffung</div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="purchase_date">Anschaffungsdatum</label>
+                <input type="date" id="purchase_date" name="purchase_date"
+                       value="{{ asset.purchase_date.isoformat() if asset else today }}" required>
+            </div>
+            <div class="form-group">
+                <label for="purchase_price_gross">Kaufpreis Brutto (€)</label>
+                <input type="number" id="purchase_price_gross" name="purchase_price_gross"
+                       step="0.01" min="0.01"
+                       value="{{ asset.purchase_price_gross if asset else '' }}" required
+                       placeholder="0,00"
+                       oninput="calculateNet()">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="purchase_price_net">Kaufpreis Netto (€) <span class="text-muted text-sm">— AfA-Bemessungsgrundlage</span></label>
+                <input type="number" id="purchase_price_net" name="purchase_price_net"
+                       step="0.01" min="0.01"
+                       value="{{ asset.purchase_price_net if asset else '' }}" required
+                       placeholder="0,00">
+            </div>
+            <div class="form-group">
+                <label for="salvage_value">Erinnerungswert (€)</label>
+                <input type="number" id="salvage_value" name="salvage_value"
+                       step="0.01" min="0"
+                       value="{{ asset.salvage_value if asset else '0' }}"
+                       placeholder="0,00">
+                <span class="text-muted text-xs mt-4 d-inline">Üblicherweise 0 € oder 1 €</span>
+            </div>
+        </div>
+
+        <hr class="section-divider">
+        <div class="card-header">Abschreibung</div>
+
+        <div class="form-group">
+            <label for="depreciation_category_id">AfA-Kategorie</label>
+            <select id="depreciation_category_id" name="depreciation_category_id" onchange="applyCategoryDefaults()">
+                <option value="">— Keine Kategorie —</option>
+                {% for cat in depreciation_categories %}
+                <option value="{{ cat.id }}"
+                        data-months="{{ cat.useful_life_months }}"
+                        data-method="{{ cat.default_method }}"
+                        {{ 'selected' if asset and asset.depreciation_category_id == cat.id }}>
+                    {{ cat.name }} ({{ (cat.useful_life_months / 12)|round(1) }} J.)
+                </option>
+                {% endfor %}
+            </select>
+            <span class="text-muted text-xs mt-4 d-inline">Übernimmt Nutzungsdauer und AfA-Methode als Voreinstellung</span>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="depreciation_method">AfA-Methode</label>
+                <select id="depreciation_method" name="depreciation_method" required onchange="updateMethodFields()">
+                    {% for key, label in methods.items() %}
+                    <option value="{{ key }}"
+                            {{ 'selected' if asset and asset.depreciation_method == key }}>
+                        {{ label }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <div id="method-hint" class="text-muted text-xs mt-4"></div>
+            </div>
+            <div class="form-group" id="useful-life-group">
+                <label for="useful_life_months">Nutzungsdauer (Monate)</label>
+                <input type="number" id="useful_life_months" name="useful_life_months"
+                       min="1"
+                       value="{{ asset.useful_life_months if asset and asset.useful_life_months else '' }}"
+                       placeholder="z.B. 36">
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="form-group">
+            <label for="document">Beleg / Rechnung</label>
+            <input type="file" id="document" name="document" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
+            {% if asset and asset.document_filename %}
+            <div class="mt-6 text-sm">
+                Aktuell: <a href="{{ url_for('admin.uploaded_file', filename=asset.document_filename) }}" target="_blank" class="text-accent">{{ asset.document_filename }}</a>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="notes">Notizen</label>
+            <textarea id="notes" name="notes" rows="3"
+                      placeholder="Optionale Notizen...">{{ asset.notes if asset and asset.notes else '' }}</textarea>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-primary">
+                {{ 'Speichern' if asset else 'Anlagegut erstellen' }}
+            </button>
+            <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var rules = {
+    gwg_limit: {{ rules.gwg_sofort_limit }},
+    sammelposten_min: {{ rules.sammelposten_min }},
+    sammelposten_max: {{ rules.sammelposten_max }},
+    sammelposten_years: {{ rules.sammelposten_years }}
+};
+
+function calculateNet() {
+    var gross = parseFloat(document.getElementById('purchase_price_gross').value) || 0;
+    var netField = document.getElementById('purchase_price_net');
+    // Only auto-fill if net is empty or was auto-calculated
+    if (!netField.dataset.manual) {
+        // Use site tax rate if regular, otherwise gross = net
+        var taxRate = {{ site_settings.tax_rate if site_settings.tax_mode == 'regular' else 0 }};
+        var net = taxRate > 0 ? gross / (1 + taxRate / 100) : gross;
+        netField.value = net.toFixed(2);
+        updateMethodHint(net);
+    }
+}
+
+document.getElementById('purchase_price_net').addEventListener('input', function() {
+    this.dataset.manual = '1';
+    updateMethodHint(parseFloat(this.value) || 0);
+});
+
+function updateMethodHint(netPrice) {
+    var hint = document.getElementById('method-hint');
+    var method = document.getElementById('depreciation_method').value;
+    if (netPrice <= rules.gwg_limit && method !== 'sofort') {
+        hint.textContent = 'Hinweis: Nettobetrag ≤ ' + rules.gwg_limit + ' € — Sofortabschreibung (GWG) möglich.';
+    } else if (netPrice > rules.gwg_limit && method === 'sofort') {
+        hint.textContent = '⚠ Nettobetrag > ' + rules.gwg_limit + ' € — Sofortabschreibung nicht zulässig!';
+        hint.style.color = 'var(--color-danger)';
+    } else if (netPrice >= rules.sammelposten_min && netPrice <= rules.sammelposten_max) {
+        hint.textContent = 'Nettobetrag ' + rules.sammelposten_min + '–' + rules.sammelposten_max + ' € — Sammelposten möglich.';
+        hint.style.color = '';
+    } else {
+        hint.textContent = '';
+    }
+}
+
+function updateMethodFields() {
+    var method = document.getElementById('depreciation_method').value;
+    var usefulLifeGroup = document.getElementById('useful-life-group');
+
+    if (method === 'sofort' || method === 'sammelposten') {
+        usefulLifeGroup.style.display = 'none';
+    } else {
+        usefulLifeGroup.style.display = '';
+    }
+
+    var net = parseFloat(document.getElementById('purchase_price_net').value) || 0;
+    updateMethodHint(net);
+}
+
+function applyCategoryDefaults() {
+    var select = document.getElementById('depreciation_category_id');
+    var option = select.options[select.selectedIndex];
+    if (option && option.value) {
+        var months = option.getAttribute('data-months');
+        var method = option.getAttribute('data-method');
+        if (months) document.getElementById('useful_life_months').value = months;
+        if (method) {
+            document.getElementById('depreciation_method').value = method;
+            updateMethodFields();
+        }
+    }
+}
+
+// Initialize
+updateMethodFields();
+</script>
+{% endblock %}

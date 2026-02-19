@@ -1,0 +1,109 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+    <form method="GET" class="d-flex align-center gap-10">
+        <select name="year" onchange="this.form.submit()" style="width: auto;">
+            {% for y in years %}
+            <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+    <div class="stat-card stat-success">
+        <div class="stat-label">Einnahmen {{ year }}</div>
+        <div class="stat-value text-success">{{ total_income|currency }}</div>
+    </div>
+    <div class="stat-card stat-danger">
+        <div class="stat-label">Ausgaben {{ year }}</div>
+        <div class="stat-value text-danger">{{ total_expenses|currency }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Gewinn / Verlust {{ year }}</div>
+        <div class="stat-value {{ 'text-success' if profit >= 0 else 'text-danger' }}">{{ profit|currency }}</div>
+    </div>
+    <div class="stat-card stat-muted">
+        <div class="stat-label">Buchungen {{ year }}</div>
+        <div class="stat-value">{{ transaction_count }}</div>
+    </div>
+</div>
+
+<!-- Monthly Overview -->
+<div class="card">
+    <div class="card-header">Monatsübersicht {{ year }}</div>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Monat</th>
+                    <th style="text-align: right;">Einnahmen</th>
+                    <th style="text-align: right;">Ausgaben</th>
+                    <th style="text-align: right;">Ergebnis</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in range(1, 13) %}
+                <tr>
+                    <td>{{ monthly_data[m].name }}</td>
+                    <td style="text-align: right;" class="text-success">{{ monthly_data[m].income|currency }}</td>
+                    <td style="text-align: right;" class="text-danger">{{ monthly_data[m].expenses|currency }}</td>
+                    <td style="text-align: right;" class="{{ 'text-success' if monthly_data[m].profit >= 0 else 'text-danger' }}">
+                        {{ monthly_data[m].profit|currency }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Recent Transactions -->
+<div class="card">
+    <div class="card-header d-flex justify-between align-center">
+        <span>Letzte Buchungen</span>
+        <a href="{{ url_for('admin.transactions') }}" class="btn btn-sm btn-outline">Alle anzeigen</a>
+    </div>
+    {% if recent_transactions %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Datum</th>
+                    <th>Beschreibung</th>
+                    <th>Kategorie</th>
+                    <th style="text-align: right;">Betrag</th>
+                    <th>Typ</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in recent_transactions %}
+                <tr>
+                    <td>{{ t.date|date_format }}</td>
+                    <td>{{ t.description }}</td>
+                    <td>{{ t.category.name if t.category else '–' }}</td>
+                    <td style="text-align: right;">{{ t.amount|currency }}</td>
+                    <td>
+                        {% if t.type == 'income' %}
+                        <span class="badge badge-income">Einnahme</span>
+                        {% else %}
+                        <span class="badge badge-expense">Ausgabe</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>Keine Buchungen für {{ year }} vorhanden.</p>
+        <a href="{{ url_for('admin.transaction_new') }}" class="btn btn-primary mt-16">Erste Buchung erstellen</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'Benutzer bearbeiten' if user else 'Neuer Benutzer' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'Benutzer bearbeiten' if user else 'Neuer Benutzer' }}</h1>
+    <a href="{{ url_for('admin.users') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="username">Benutzername</label>
+                <input type="text" id="username" name="username"
+                       value="{{ user.username if user else '' }}" required
+                       placeholder="Login-Name">
+            </div>
+            <div class="form-group">
+                <label for="display_name">Anzeigename</label>
+                <input type="text" id="display_name" name="display_name"
+                       value="{{ user.display_name if user else '' }}"
+                       placeholder="Angezeigter Name">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="password">Passwort{% if user %} (leer lassen zum Beibehalten){% endif %}</label>
+            <input type="password" id="password" name="password"
+                   placeholder="Mindestens 6 Zeichen"
+                   {{ 'required' if not user }}>
+        </div>
+
+        <div class="form-group">
+            <label class="d-flex align-center gap-8" style="cursor: pointer;">
+                <input type="checkbox" name="is_admin" style="width: auto;"
+                       {{ 'checked' if user and user.is_admin }}>
+                <span>Administrator-Rechte</span>
+            </label>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="d-flex gap-10">
+            <button type="submit" class="btn btn-primary">
+                {{ 'Speichern' if user else 'Benutzer erstellen' }}
+            </button>
+            <a href="{{ url_for('admin.users') }}" class="btn btn-outline">Abbrechen</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

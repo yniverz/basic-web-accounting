@@ -1,0 +1,85 @@
+{% extends "admin/base.html" %}
+{% block title %}Kategorien - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Kategorien</h1>
+    <a href="{{ url_for('admin.category_new') }}" class="btn btn-primary">+ Neue Kategorie</a>
+</div>
+
+<!-- Income Categories -->
+<div class="card">
+    <div class="card-header">Einnahme-Kategorien</div>
+    {% if income_categories %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Beschreibung</th>
+                    <th>Sortierung</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in income_categories %}
+                <tr>
+                    <td class="font-semibold">{{ c.name }}</td>
+                    <td class="text-muted text-sm">{{ c.description or '–' }}</td>
+                    <td>{{ c.sort_order }}</td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('admin.category_edit', id=c.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('admin.category_delete', id=c.id) }}" onsubmit="return confirm('Kategorie wirklich löschen? Zugehörige Buchungen werden nicht gelöscht.')">
+                                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Keine Einnahme-Kategorien vorhanden.</div>
+    {% endif %}
+</div>
+
+<!-- Expense Categories -->
+<div class="card">
+    <div class="card-header">Ausgabe-Kategorien</div>
+    {% if expense_categories %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Beschreibung</th>
+                    <th>Sortierung</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in expense_categories %}
+                <tr>
+                    <td class="font-semibold">{{ c.name }}</td>
+                    <td class="text-muted text-sm">{{ c.description or '–' }}</td>
+                    <td>{{ c.sort_order }}</td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('admin.category_edit', id=c.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('admin.category_delete', id=c.id) }}" onsubmit="return confirm('Kategorie wirklich löschen? Zugehörige Buchungen werden nicht gelöscht.')">
+                                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Keine Ausgabe-Kategorien vorhanden.</div>
+    {% endif %}
+</div>
+{% endblock %}
