@@ -26,7 +26,7 @@ from helpers import (
     TAX_TREATMENT_LABELS,
 )
 from models import (
-    Asset, Category, DepreciationCategory, SiteSettings, Transaction, User, db,
+    Asset, Category, ChatHistory, DepreciationCategory, SiteSettings, Transaction, User, db,
 )
 from depreciation import (
     DEPRECIATION_METHODS, get_book_value, get_depreciation_for_year,
@@ -494,6 +494,37 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # ---- Web access ----
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "Fetch the content of a web page by URL. Returns the text content (HTML tags stripped). Useful for looking up current tax rates, exchange rates, legal info, AfA tables, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The full URL to fetch (https://...)"},
+                    "max_length": {"type": "integer", "description": "Max characters to return (default 10000, max 50000)"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web using DuckDuckGo. Returns a list of results with title, URL, and snippet. Use this to find relevant pages before fetching them.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "max_results": {"type": "integer", "description": "Number of results (default 5, max 10)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -951,6 +982,77 @@ def execute_tool(name, args):
         db.session.commit()
         return {'status': 'deleted', 'id': args['id']}
 
+    # ---- Web access ----
+    if name == 'fetch_url':
+        import httpx
+        import re
+        url = args.get('url', '')
+        max_len = min(args.get('max_length', 10000), 50000)
+        if not url.startswith(('http://', 'https://')):
+            return {'error': 'URL must start with http:// or https://'}
+        try:
+            resp = httpx.get(url, timeout=15, follow_redirects=True, headers={
+                'User-Agent': 'Mozilla/5.0 (compatible; AccountingBot/1.0)'
+            })
+            resp.raise_for_status()
+            ct = resp.headers.get('content-type', '')
+            if 'html' in ct:
+                text = resp.text
+                # Strip script/style blocks
+                text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', text, flags=re.DOTALL|re.IGNORECASE)
+                # Strip HTML tags
+                text = re.sub(r'<[^>]+>', ' ', text)
+                # Collapse whitespace
+                text = re.sub(r'\s+', ' ', text).strip()
+            else:
+                text = resp.text
+            if len(text) > max_len:
+                text = text[:max_len] + '\n... (truncated)'
+            return {'url': url, 'content': text, 'length': len(text)}
+        except httpx.HTTPStatusError as e:
+            return {'error': f'HTTP {e.response.status_code} for {url}'}
+        except Exception as e:
+            return {'error': f'Failed to fetch {url}: {str(e)}'}
+
+    if name == 'web_search':
+        import httpx
+        query = args.get('query', '')
+        max_results = min(args.get('max_results', 5), 10)
+        if not query:
+            return {'error': 'query is required'}
+        try:
+            # Use DuckDuckGo HTML search
+            resp = httpx.get(
+                'https://html.duckduckgo.com/html/',
+                params={'q': query},
+                timeout=15,
+                headers={'User-Agent': 'Mozilla/5.0 (compatible; AccountingBot/1.0)'},
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            import re
+            # Parse results from DDG HTML
+            results = []
+            # Find result blocks
+            blocks = re.findall(
+                r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                resp.text, re.DOTALL
+            )
+            for href, title, snippet in blocks[:max_results]:
+                # Clean HTML from title/snippet
+                title = re.sub(r'<[^>]+>', '', title).strip()
+                snippet = re.sub(r'<[^>]+>', '', snippet).strip()
+                # DDG wraps URLs in a redirect; extract actual URL
+                import urllib.parse
+                if 'uddg=' in href:
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                    href = parsed.get('uddg', [href])[0]
+                results.append({'title': title, 'url': href, 'snippet': snippet})
+            return {'query': query, 'results': results, 'count': len(results)}
+        except Exception as e:
+            return {'error': f'Search failed: {str(e)}'}
+
     return {'error': f'Unknown tool: {name}'}
 
 
@@ -963,6 +1065,7 @@ READ_ONLY_TOOLS = {
     'list_categories', 'list_transactions', 'list_assets',
     'list_depreciation_categories', 'get_transaction', 'get_asset',
     'get_settings', 'get_dashboard_summary', 'list_users',
+    'fetch_url', 'web_search',
 }
 
 # Human-readable labels for tool calls
@@ -993,6 +1096,8 @@ TOOL_LABELS = {
     'create_user': '➕ Benutzer erstellen',
     'edit_user': '✏️ Benutzer bearbeiten',
     'delete_user': '🗑️ Benutzer löschen',
+    'fetch_url': '🌐 Webseite abrufen',
+    'web_search': '🔍 Websuche',
 }
 
 # German labels for argument keys (for display)
@@ -1018,6 +1123,8 @@ ARG_LABELS = {
     'tax_rate_reduced': 'Ermäßigter Steuersatz',
     'username': 'Benutzername', 'password': 'Passwort',
     'display_name': 'Anzeigename', 'is_admin': 'Administrator',
+    'url': 'URL', 'max_length': 'Max. Zeichen', 'query': 'Suchbegriff',
+    'max_results': 'Max. Ergebnisse',
 }
 
 
@@ -1041,10 +1148,17 @@ def _summarize_result(name, result):
     return str(result)[:80]
 
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 You are a helpful accounting assistant for a German small-business bookkeeping application (EÜR – Einnahmenüberschussrechnung).
 You can query and manipulate ALL data: categories (Buchungskategorien), transactions (Buchungen), assets (Anlagegüter),
 depreciation categories (AfA-Kategorien), business settings, and users.
+
+Current business settings:
+- Firmenname: {business_name}
+- Besteuerungsart: {tax_mode_label}
+- Regelsteuersatz: {tax_rate}%
+- Ermäßigter Steuersatz: {tax_rate_reduced}%
+{extra_tax_info}
 
 Use the provided tools to read and modify data.
 IMPORTANT: Write operations (create, edit, delete, dispose, update) will be shown to the user for approval before execution. Do NOT ask the user for confirmation yourself – the system handles that automatically. Just call the tool when you think it's the right action.
@@ -1063,7 +1177,35 @@ When listing data, format it nicely for the user (use formatted tables, bullets,
 Respond in the same language the user writes in (German or English).
 Monetary values are in EUR. Dates are YYYY-MM-DD.
 The current date is {today}.
-""".format(today=date.today().isoformat())
+
+You have web access via `web_search` (DuckDuckGo) and `fetch_url` tools. Use them to look up current information when needed (e.g. tax rates, exchange rates, legal info, AfA tables).
+"""
+
+
+def _build_system_prompt():
+    """Build system prompt with current settings context."""
+    settings = SiteSettings.get_settings()
+    tax_mode_label = 'Regelbesteuerung' if settings.tax_mode == 'regular' else 'Kleinunternehmer (§ 19 UStG)'
+
+    extra = ''
+    if settings.tax_mode == 'kleinunternehmer':
+        extra = '- Hinweis: Als Kleinunternehmer wird KEINE USt ausgewiesen. Alle Beträge sind brutto = netto.'
+    else:
+        extra = '- Hinweis: Regelbesteuert – bei Buchungen immer die korrekte Steuerbehandlung (tax_treatment) setzen.'
+
+    if settings.tax_number:
+        extra += f'\n- Steuernummer: {settings.tax_number}'
+    if settings.vat_id:
+        extra += f'\n- USt-IdNr.: {settings.vat_id}'
+
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        business_name=settings.business_name or 'Nicht konfiguriert',
+        tax_mode_label=tax_mode_label,
+        tax_rate=settings.tax_rate,
+        tax_rate_reduced=settings.tax_rate_reduced,
+        extra_tax_info=extra,
+        today=date.today().isoformat(),
+    )
 
 
 def _build_openai_tools():
@@ -1185,7 +1327,7 @@ def _call_anthropic(messages, api_key, model, tool_calls_log=None):
             continue
         anthropic_messages.append({'role': m['role'], 'content': m['content']})
 
-    system_text = SYSTEM_PROMPT
+    system_text = _build_system_prompt()
 
     for _ in range(20):
         payload = {
@@ -1364,7 +1506,7 @@ def _resume_anthropic(messages, anthropic_messages, pending, approved, correctio
         payload = {
             'model': model,
             'max_tokens': 4096,
-            'system': SYSTEM_PROMPT,
+            'system': _build_system_prompt(),
             'messages': anthropic_messages,
             'tools': tools,
         }
@@ -1475,7 +1617,7 @@ def chat_send():
     if not user_message:
         return jsonify({'error': 'Empty message'}), 400
 
-    messages = [{'role': 'system', 'content': SYSTEM_PROMPT}]
+    messages = [{'role': 'system', 'content': _build_system_prompt()}]
     for h in history:
         messages.append({'role': h['role'], 'content': h['content']})
     messages.append({'role': 'user', 'content': user_message})
@@ -1565,3 +1707,50 @@ def chat_confirm():
         result['reply'] = reply
 
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# Chat persistence (per user, single current chat)
+# ---------------------------------------------------------------------------
+
+@ai_bp.route('/ai-chat/save', methods=['POST'])
+@login_required
+def chat_save():
+    """Save current chat state for the logged-in user."""
+    data = request.get_json(force=True)
+    history_json = json.dumps(data.get('history', []), ensure_ascii=False)
+    html_content = data.get('html', '')
+
+    rec = ChatHistory.query.filter_by(user_id=current_user.id).first()
+    if rec:
+        rec.history_json = history_json
+        rec.html_content = html_content
+    else:
+        rec = ChatHistory(user_id=current_user.id,
+                          history_json=history_json,
+                          html_content=html_content)
+        db.session.add(rec)
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@ai_bp.route('/ai-chat/load')
+@login_required
+def chat_load():
+    """Load persisted chat for the logged-in user."""
+    rec = ChatHistory.query.filter_by(user_id=current_user.id).first()
+    if not rec or rec.history_json == '[]':
+        return jsonify({'history': [], 'html': ''})
+    return jsonify({
+        'history': json.loads(rec.history_json),
+        'html': rec.html_content,
+    })
+
+
+@ai_bp.route('/ai-chat/clear', methods=['POST'])
+@login_required
+def chat_clear():
+    """Delete persisted chat for the logged-in user."""
+    ChatHistory.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({'ok': True})

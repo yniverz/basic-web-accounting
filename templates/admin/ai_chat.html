@@ -96,6 +96,29 @@
     let isLoading = false;
     let pendingState = null;
 
+    /* ---- Persistence helpers ---- */
+    function saveChat() {
+        const html = messagesEl.innerHTML;
+        fetch('{{ url_for("ai_chat.chat_save") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({history: history, html: html}),
+        }).catch(() => {});
+    }
+
+    async function loadChat() {
+        try {
+            const resp = await fetch('{{ url_for("ai_chat.chat_load") }}');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data.history && data.history.length > 0) {
+                history = data.history;
+                messagesEl.innerHTML = data.html || '';
+                scrollToBottom();
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     /* ---- Markdown-lite renderer ---- */
     function renderMarkdown(text) {
         text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -318,6 +341,7 @@
                 const data = await resp.json();
                 history = data.history || [];
                 addToolLogAndMessage(data);
+                saveChat();
 
                 if (data.pending_actions) {
                     isLoading = false;
@@ -376,6 +400,7 @@
                 const data = await resp.json();
                 history = data.history || [];
                 addToolLogAndMessage(data);
+                saveChat();
 
                 if (data.pending_actions) {
                     isLoading = false;
@@ -427,6 +452,7 @@
         history = [];
         pendingState = null;
         messagesEl.innerHTML = '';
+        fetch('{{ url_for("ai_chat.chat_clear") }}', {method: 'POST'}).catch(() => {});
         messagesEl.innerHTML = `
             <div class="chat-welcome">
                 <div class="chat-welcome-icon">🤖</div>
@@ -445,6 +471,9 @@
     };
 
     if (inputEl && !inputEl.disabled) inputEl.focus();
+
+    /* Load persisted chat on page open */
+    loadChat();
 })();
 </script>
 {% endblock %}

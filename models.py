@@ -179,3 +179,17 @@ class DepreciationCategory(db.Model):
 
     def __repr__(self):
         return f'<DepreciationCategory {self.name} ({self.useful_life_months}m)>'
+
+
+class ChatHistory(db.Model):
+    """Persisted AI-chat state per user (single current chat, no archive)."""
+    __tablename__ = 'chat_history'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
+    history_json = db.Column(db.Text, nullable=False, default='[]')
+    html_content = db.Column(db.Text, nullable=False, default='')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<ChatHistory user_id={self.user_id}>'
