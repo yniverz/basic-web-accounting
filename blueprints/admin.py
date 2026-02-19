@@ -752,6 +752,11 @@ def asset_detail(id):
 def asset_book_outflow(id):
     asset = Asset.query.get_or_404(id)
 
+    # Bundle members must use the bundle detail page
+    if asset.bundle_id:
+        flash('Dieses Anlagegut ist Teil eines Bündels. Bitte die Kontobuchung über die Bündel-Detailseite verwalten.', 'warning')
+        return redirect(url_for('admin.asset_detail', id=asset.id))
+
     # Check if already has a linked transaction
     existing = Transaction.query.filter_by(linked_asset_id=asset.id).first()
     if existing:
@@ -789,6 +794,11 @@ def asset_book_outflow(id):
 @admin_bp.route('/assets/<int:id>/unlink-outflow', methods=['POST'])
 def asset_unlink_outflow(id):
     asset = Asset.query.get_or_404(id)
+
+    # Bundle members must use the bundle detail page
+    if asset.bundle_id:
+        flash('Dieses Anlagegut ist Teil eines Bündels. Bitte die Kontobuchung über die Bündel-Detailseite verwalten.', 'warning')
+        return redirect(url_for('admin.asset_detail', id=asset.id))
     deleted = Transaction.query.filter_by(linked_asset_id=asset.id).delete()
     db.session.commit()
     if deleted:

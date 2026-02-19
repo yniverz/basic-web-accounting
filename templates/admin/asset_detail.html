@@ -206,7 +206,10 @@
 <!-- Linked Account Transaction -->
 <div class="card">
     <div class="card-header">Kontobuchung</div>
-    {% if linked_tx %}
+    {% if asset.bundle_id %}
+    <p class="text-muted text-sm mb-16">Dieses Anlagegut ist Teil eines Bündels. Die Kontobuchung für den Kauf wird über die Bündel-Detailseite verwaltet.</p>
+    <a href="{{ url_for('admin.bundle_detail', bundle_id=asset.bundle_id) }}" class="btn btn-sm btn-outline">→ Bündel-Details öffnen</a>
+    {% elif linked_tx %}
     <div class="form-row">
         <div>
             <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
