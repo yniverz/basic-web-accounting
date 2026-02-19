@@ -7,6 +7,13 @@ from models import db, User, SiteSettings
 from werkzeug.security import generate_password_hash
 from helpers import format_currency, format_date
 
+# Load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Optional minification
 try:
     import cssmin
@@ -111,8 +118,10 @@ def create_app():
     # Register blueprints
     from blueprints.auth import auth_bp
     from blueprints.admin import admin_bp
+    from blueprints.ai_chat import ai_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix='/admin')
+    app.register_blueprint(ai_bp, url_prefix='/admin')
 
     # Redirect root to admin (no public pages in this app)
     @app.route('/')

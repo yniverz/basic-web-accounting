@@ -1,0 +1,450 @@
+{% extends "admin/base.html" %}
+{% block title %}KI-Assistent - {{ site_settings.business_name }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('serve_static', filename='css/ai-chat.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>KI-Assistent</h1>
+    <div class="d-flex align-center gap-10">
+        <span class="text-muted text-sm">{{ ai_provider | capitalize }} &middot; {{ ai_model }}</span>
+        <button class="btn btn-sm btn-outline" onclick="clearChat()" title="Chat leeren">Neuer Chat</button>
+    </div>
+</div>
+
+{% if not ai_configured %}
+<div class="alert alert-warning">
+    <strong>KI nicht konfiguriert.</strong> Bitte setzen Sie <code>AI_API_KEY</code> in Ihren Umgebungsvariablen (.env).
+    Optional: <code>AI_PROVIDER</code> (openai/anthropic/custom), <code>AI_MODEL</code>, <code>AI_BASE_URL</code>.
+</div>
+{% endif %}
+
+<div class="chat-container" id="chatContainer">
+    <div class="chat-messages" id="chatMessages">
+        <div class="chat-welcome">
+            <div class="chat-welcome-icon">🤖</div>
+            <h2>Buchhaltungs-Assistent</h2>
+            <p class="text-muted">Ich kann Ihre Buchhaltungsdaten lesen und bearbeiten: Buchungen, Kategorien, Anlagegüter, Einstellungen und mehr.</p>
+            <div class="chat-suggestions">
+                <button class="chat-suggestion" onclick="sendSuggestion(this)">Zeige mir eine Übersicht meiner Finanzen für dieses Jahr</button>
+                <button class="chat-suggestion" onclick="sendSuggestion(this)">Welche Kategorien habe ich?</button>
+                <button class="chat-suggestion" onclick="sendSuggestion(this)">Liste meine letzten 10 Buchungen auf</button>
+                <button class="chat-suggestion" onclick="sendSuggestion(this)">Erstelle eine neue Ausgabenkategorie „Fortbildung"</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="chat-input-area">
+        <form id="chatForm" onsubmit="handleSubmit(event)">
+            <div class="chat-input-wrapper">
+                <textarea id="chatInput"
+                          placeholder="Nachricht eingeben..."
+                          rows="1"
+                          {% if not ai_configured %}disabled{% endif %}
+                          onkeydown="handleKeyDown(event)"
+                          oninput="autoResize(this)"></textarea>
+                <button type="submit" class="chat-send-btn" id="sendBtn"
+                        {% if not ai_configured %}disabled{% endif %}
+                        title="Senden">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13" /><path d="M22 2L15 22L11 13L2 9L22 2Z" />
+                    </svg>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    const messagesEl = document.getElementById('chatMessages');
+    const inputEl = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const form = document.getElementById('chatForm');
+
+    /* German labels for argument keys */
+    const ARG_LABELS = {
+        'name': 'Name', 'type': 'Typ', 'description': 'Beschreibung',
+        'sort_order': 'Sortierung', 'id': 'ID', 'date': 'Datum',
+        'amount': 'Betrag', 'category_id': 'Kategorie-ID',
+        'tax_treatment': 'Steuerbehandlung', 'custom_tax_rate': 'Steuersatz',
+        'notes': 'Notizen', 'year': 'Jahr', 'month': 'Monat',
+        'type_filter': 'Typ-Filter', 'limit': 'Limit', 'search': 'Suche',
+        'status': 'Status', 'purchase_date': 'Kaufdatum',
+        'purchase_price_gross': 'Kaufpreis (brutto)',
+        'depreciation_method': 'AfA-Methode', 'useful_life_months': 'Nutzungsdauer (Monate)',
+        'salvage_value': 'Restwert', 'depreciation_category_id': 'AfA-Kategorie-ID',
+        'purchase_tax_treatment': 'Steuerbehandlung (Kauf)',
+        'disposal_date': 'Abgangsdatum', 'disposal_price_gross': 'Verkaufspreis (brutto)',
+        'disposal_reason': 'Abgangsgrund', 'disposal_tax_treatment': 'Steuerbehandlung (Verkauf)',
+        'default_method': 'Standard-Methode',
+        'business_name': 'Firmenname', 'address_lines': 'Adresse',
+        'contact_lines': 'Kontakt', 'bank_lines': 'Bankverbindung',
+        'tax_number': 'Steuernummer', 'vat_id': 'USt-IdNr.',
+        'tax_mode': 'Steuermodus', 'tax_rate': 'Steuersatz',
+        'tax_rate_reduced': 'Ermäßigter Steuersatz',
+        'username': 'Benutzername', 'password': 'Passwort',
+        'display_name': 'Anzeigename', 'is_admin': 'Administrator',
+    };
+
+    let history = [];
+    let isLoading = false;
+    let pendingState = null;
+
+    /* ---- Markdown-lite renderer ---- */
+    function renderMarkdown(text) {
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function(m, lang, code) {
+            return '<pre><code class="lang-' + lang + '">' + code.trim() + '</code></pre>';
+        });
+        text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+        text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        text = text.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+        text = text.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+        text = text.replace(/^# (.+)$/gm, '<h2>$1</h2>');
+        text = text.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+        text = text.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>');
+        text = text.replace(/<\/ul>\s*<ul>/g, '');
+        text = text.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+        text = text.replace(/\n/g, '<br>');
+        text = text.replace(/<br>\s*(<h[234]|<pre|<ul|<\/ul|<li)/g, '$1');
+        text = text.replace(/(<\/h[234]>|<\/pre>|<\/ul>)\s*<br>/g, '$1');
+        return text;
+    }
+
+    /* ---- Format args for display ---- */
+    function formatArgs(args) {
+        if (!args || Object.keys(args).length === 0) return '';
+        let parts = [];
+        for (const [k, v] of Object.entries(args)) {
+            const label = ARG_LABELS[k] || k;
+            let val = v;
+            if (typeof v === 'boolean') val = v ? 'Ja' : 'Nein';
+            if (k === 'password') val = '••••••';
+            if (typeof v === 'number') {
+                if (k.includes('amount') || k.includes('price') || k.includes('value') || k === 'amount') {
+                    val = v.toLocaleString('de-DE', {minimumFractionDigits: 2}) + ' €';
+                }
+            }
+            parts.push('<span class="tool-arg"><span class="tool-arg-key">' + label + ':</span> ' + val + '</span>');
+        }
+        return parts.join('');
+    }
+
+    /* ---- Tool calls log rendering ---- */
+    function renderToolCallsLog(log) {
+        if (!log || log.length === 0) return null;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'tool-calls-log';
+
+        const header = document.createElement('div');
+        header.className = 'tool-calls-header';
+        header.innerHTML = '🔧 <span>' + log.length + ' Funktion' + (log.length !== 1 ? 'en' : '') + ' aufgerufen</span>';
+        header.onclick = function() { wrapper.classList.toggle('expanded'); };
+        wrapper.appendChild(header);
+
+        const body = document.createElement('div');
+        body.className = 'tool-calls-body';
+
+        for (const entry of log) {
+            const item = document.createElement('div');
+            item.className = 'tool-call-item' + (entry.is_write ? ' tool-call-write' : ' tool-call-read');
+
+            item.innerHTML =
+                '<div class="tool-call-header">' +
+                    '<span class="tool-call-label">' + (entry.label || entry.name) + '</span>' +
+                    '<span class="tool-call-result">' + (entry.result_summary || (entry.pending ? '⏳ Bestätigung' : '')) + '</span>' +
+                '</div>' +
+                (Object.keys(entry.args || {}).length > 0
+                    ? '<div class="tool-call-args">' + formatArgs(entry.args) + '</div>'
+                    : '');
+
+            body.appendChild(item);
+        }
+
+        wrapper.appendChild(body);
+        return wrapper;
+    }
+
+    /* ---- Pending actions confirmation card ---- */
+    function renderConfirmationCard(pendingActions, conversationState, toolCallsLog) {
+        const card = document.createElement('div');
+        card.className = 'chat-message chat-message-assistant';
+        card.id = 'confirmationCard';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = '🤖';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble confirmation-bubble';
+
+        let html = '<div class="confirm-header">⚠️ Bestätigung erforderlich</div>';
+        html += '<div class="confirm-description">Folgende Aktionen sollen ausgeführt werden:</div>';
+        html += '<div class="confirm-actions">';
+
+        for (const action of pendingActions) {
+            html += '<div class="confirm-action">';
+            html += '<div class="confirm-action-label">' + (action.label || action.name) + '</div>';
+            html += '<div class="confirm-action-args">' + formatArgs(action.args) + '</div>';
+            html += '</div>';
+        }
+
+        html += '</div>';
+        html += '<div class="confirm-correction">';
+        html += '<textarea id="correctionInput" placeholder="Optional: Korrekturen oder Rückfragen eingeben..." rows="2"></textarea>';
+        html += '</div>';
+        html += '<div class="confirm-buttons">';
+        html += '<button class="btn btn-success btn-confirm" onclick="handleConfirm(true)">✓ Bestätigen & Ausführen</button>';
+        html += '<button class="btn btn-danger btn-confirm" onclick="handleConfirm(false)">✗ Ablehnen</button>';
+        html += '</div>';
+
+        bubble.innerHTML = html;
+        card.appendChild(avatar);
+        card.appendChild(bubble);
+
+        pendingState = {
+            conversationState: conversationState,
+            toolCallsLog: toolCallsLog,
+            pendingActions: pendingActions,
+        };
+
+        return card;
+    }
+
+    /* ---- Message rendering ---- */
+    function addMessage(role, content) {
+        const welcome = messagesEl.querySelector('.chat-welcome');
+        if (welcome) welcome.remove();
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'chat-message chat-message-' + role;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = role === 'user' ? '👤' : '🤖';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.innerHTML = renderMarkdown(content);
+
+        msgDiv.appendChild(avatar);
+        msgDiv.appendChild(bubble);
+        messagesEl.appendChild(msgDiv);
+        scrollToBottom();
+    }
+
+    function addToolLogAndMessage(data) {
+        const welcome = messagesEl.querySelector('.chat-welcome');
+        if (welcome) welcome.remove();
+
+        if (data.tool_calls_log && data.tool_calls_log.length > 0) {
+            const logEl = renderToolCallsLog(data.tool_calls_log);
+            if (logEl) messagesEl.appendChild(logEl);
+        }
+
+        if (data.reply) {
+            addMessage('assistant', data.reply);
+        } else if (data.pending_actions) {
+            const confirmCard = renderConfirmationCard(
+                data.pending_actions,
+                data.conversation_state,
+                data.tool_calls_log
+            );
+            messagesEl.appendChild(confirmCard);
+        }
+
+        scrollToBottom();
+    }
+
+    function addLoadingIndicator() {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'chat-message chat-message-assistant';
+        msgDiv.id = 'loadingMsg';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = '🤖';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble chat-loading';
+        bubble.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+
+        msgDiv.appendChild(avatar);
+        msgDiv.appendChild(bubble);
+        messagesEl.appendChild(msgDiv);
+        scrollToBottom();
+    }
+
+    function removeLoadingIndicator() {
+        const el = document.getElementById('loadingMsg');
+        if (el) el.remove();
+    }
+
+    function scrollToBottom() {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    /* ---- API calls ---- */
+    async function sendMessage(text) {
+        if (isLoading || !text.trim()) return;
+        isLoading = true;
+        sendBtn.disabled = true;
+        inputEl.disabled = true;
+
+        addMessage('user', text);
+        addLoadingIndicator();
+
+        try {
+            const resp = await fetch('{{ url_for("ai_chat.chat_send") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: text, history: history}),
+            });
+
+            removeLoadingIndicator();
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({error: 'Unbekannter Fehler'}));
+                addMessage('assistant', '⚠️ Fehler: ' + (err.error || resp.statusText));
+            } else {
+                const data = await resp.json();
+                history = data.history || [];
+                addToolLogAndMessage(data);
+
+                if (data.pending_actions) {
+                    isLoading = false;
+                    sendBtn.disabled = true;
+                    inputEl.disabled = true;
+                    return;
+                }
+            }
+        } catch (e) {
+            removeLoadingIndicator();
+            addMessage('assistant', '⚠️ Netzwerkfehler: ' + e.message);
+        }
+
+        isLoading = false;
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.focus();
+    }
+
+    /* ---- Confirmation handler ---- */
+    window.handleConfirm = async function(approved) {
+        if (!pendingState) return;
+
+        const correction = document.getElementById('correctionInput');
+        const correctionText = correction ? correction.value.trim() : '';
+
+        const card = document.getElementById('confirmationCard');
+        if (card) card.remove();
+
+        if (!approved && correctionText) {
+            addMessage('user', correctionText);
+        }
+
+        isLoading = true;
+        addLoadingIndicator();
+
+        try {
+            const resp = await fetch('{{ url_for("ai_chat.chat_confirm") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    approved: approved,
+                    correction: correctionText,
+                    conversation_state: pendingState.conversationState,
+                    tool_calls_log: pendingState.toolCallsLog,
+                }),
+            });
+
+            removeLoadingIndicator();
+            pendingState = null;
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({error: 'Unbekannter Fehler'}));
+                addMessage('assistant', '⚠️ Fehler: ' + (err.error || resp.statusText));
+            } else {
+                const data = await resp.json();
+                history = data.history || [];
+                addToolLogAndMessage(data);
+
+                if (data.pending_actions) {
+                    isLoading = false;
+                    sendBtn.disabled = true;
+                    inputEl.disabled = true;
+                    return;
+                }
+            }
+        } catch (e) {
+            removeLoadingIndicator();
+            pendingState = null;
+            addMessage('assistant', '⚠️ Netzwerkfehler: ' + e.message);
+        }
+
+        isLoading = false;
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.focus();
+    };
+
+    /* ---- Event handlers ---- */
+    window.handleSubmit = function(e) {
+        e.preventDefault();
+        const text = inputEl.value.trim();
+        if (!text) return;
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+        sendMessage(text);
+    };
+
+    window.handleKeyDown = function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            form.requestSubmit();
+        }
+    };
+
+    window.autoResize = function(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    };
+
+    window.sendSuggestion = function(btn) {
+        inputEl.value = btn.textContent;
+        form.requestSubmit();
+    };
+
+    window.clearChat = function() {
+        history = [];
+        pendingState = null;
+        messagesEl.innerHTML = '';
+        messagesEl.innerHTML = `
+            <div class="chat-welcome">
+                <div class="chat-welcome-icon">🤖</div>
+                <h2>Buchhaltungs-Assistent</h2>
+                <p class="text-muted">Ich kann Ihre Buchhaltungsdaten lesen und bearbeiten: Buchungen, Kategorien, Anlagegüter, Einstellungen und mehr.</p>
+                <div class="chat-suggestions">
+                    <button class="chat-suggestion" onclick="sendSuggestion(this)">Zeige mir eine Übersicht meiner Finanzen für dieses Jahr</button>
+                    <button class="chat-suggestion" onclick="sendSuggestion(this)">Welche Kategorien habe ich?</button>
+                    <button class="chat-suggestion" onclick="sendSuggestion(this)">Liste meine letzten 10 Buchungen auf</button>
+                    <button class="chat-suggestion" onclick="sendSuggestion(this)">Erstelle eine neue Ausgabenkategorie „Fortbildung"</button>
+                </div>
+            </div>`;
+        sendBtn.disabled = false;
+        inputEl.disabled = false;
+        inputEl.focus();
+    };
+
+    if (inputEl && !inputEl.disabled) inputEl.focus();
+})();
+</script>
+{% endblock %}
