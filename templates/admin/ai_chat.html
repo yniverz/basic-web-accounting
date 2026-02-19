@@ -90,6 +90,7 @@
         'tax_rate_reduced': 'Ermäßigter Steuersatz',
         'username': 'Benutzername', 'password': 'Passwort',
         'display_name': 'Anzeigename', 'is_admin': 'Administrator',
+        'code': 'Python-Code',
     };
 
     let history = [];
@@ -150,6 +151,11 @@
             let val = v;
             if (typeof v === 'boolean') val = v ? 'Ja' : 'Nein';
             if (k === 'password') val = '••••••';
+            if (k === 'code' && typeof v === 'string') {
+                val = '<pre class="tool-code-block"><code>' + v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</code></pre>';
+                parts.push('<div class="tool-arg tool-arg-code"><span class="tool-arg-key">' + label + ':</span> ' + val + '</div>');
+                continue;
+            }
             if (typeof v === 'number') {
                 if (k.includes('amount') || k.includes('price') || k.includes('value') || k === 'amount') {
                     val = v.toLocaleString('de-DE', {minimumFractionDigits: 2}) + ' €';

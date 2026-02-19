@@ -369,6 +369,27 @@
     font-weight: 500;
 }
 
+.tool-arg-code {
+    display: block;
+    margin-top: 4px;
+}
+
+.tool-code-block {
+    background: var(--bg-primary, #1e1e2e);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 4px;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.tool-code-block code {
+    white-space: pre;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    color: var(--color-text);
+}
+
 .tool-call-write .tool-call-label {
     color: var(--color-warning, #e67e22);
 }

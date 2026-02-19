@@ -611,6 +611,32 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # ---- Python evaluation ----
+    {
+        "type": "function",
+        "function": {
+            "name": "python_eval",
+            "description": (
+                "Execute a Python code snippet and return its output. "
+                "Use this for any calculations: arithmetic, percentages, tax computations, "
+                "currency conversions, date math, statistics, etc. "
+                "The code runs in a restricted sandbox. You have access to the math, decimal, "
+                "datetime, statistics, and itertools modules. "
+                "Use print() to produce output – whatever is printed will be returned as the result. "
+                "If nothing is printed, the repr() of the last expression is returned."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code to execute. Use print() for output.",
+                    }
+                },
+                "required": ["code"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -1375,6 +1401,118 @@ def execute_tool(name, args):
         except Exception as e:
             return {'error': f'Failed to fetch {url}: {str(e)}'}
 
+    if name == 'python_eval':
+        code = args.get('code', '')
+        if not code.strip():
+            return {'error': 'No code provided'}
+
+        # ---- Security: block known sandbox-escape patterns ----
+        import re as _re
+        _forbidden_patterns = _re.compile(
+            r'__\s*(subclasses|bases|mro|class|globals|locals|builtins|dict|init'
+            r'|import|loader|spec|code|func|self|reduce|getstate|module'
+            r'|qualname|wrapped|closure|call|delattr|setattr|getattr'
+            r'|getattribute)\s*__'
+            r'|importlib|__import__|subprocess|shutil'
+            r'|\bos\b\s*\.\s*(system|popen|exec|spawn|remove|unlink|rmdir|rename|listdir|walk|makedirs|path)'
+            r'|\bopen\s*\('
+            r'|\beval\s*\('
+            r'|\bexec\s*\('
+            r'|\bcompile\s*\('
+            r'|\bglobals\s*\('
+            r'|\blocals\s*\('
+            r'|\bbreakpoint\s*\('
+            r'|\bvars\s*\('
+            r'|\bgetattr\s*\('
+            r'|\bsetattr\s*\('
+            r'|\bdelattr\s*\(',
+            _re.IGNORECASE
+        )
+        if _forbidden_patterns.search(code):
+            return {'error': 'Code contains disallowed operations (security restriction)'}
+
+        try:
+            import io
+            import contextlib
+            import math
+            import decimal
+            import statistics
+            import itertools
+            from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
+
+            # Restricted global namespace — NO open, __import__, exec, eval,
+            # compile, getattr, setattr, delattr, vars, globals, locals, breakpoint
+            safe_globals = {
+                '__builtins__': {
+                    'abs': abs, 'all': all, 'any': any, 'bin': bin,
+                    'bool': bool, 'chr': chr, 'dict': dict,
+                    'divmod': divmod, 'enumerate': enumerate, 'filter': filter,
+                    'float': float, 'format': format, 'frozenset': frozenset,
+                    'hash': hash, 'hex': hex, 'int': int, 'isinstance': isinstance,
+                    'issubclass': issubclass, 'iter': iter, 'len': len,
+                    'list': list, 'map': map, 'max': max, 'min': min,
+                    'next': next, 'oct': oct, 'ord': ord, 'pow': pow,
+                    'print': print, 'range': range, 'repr': repr,
+                    'reversed': reversed, 'round': round, 'set': set,
+                    'slice': slice, 'sorted': sorted, 'str': str,
+                    'sum': sum, 'tuple': tuple, 'type': type, 'zip': zip,
+                    'True': True, 'False': False, 'None': None,
+                    'ValueError': ValueError, 'TypeError': TypeError,
+                    'ZeroDivisionError': ZeroDivisionError,
+                    'ArithmeticError': ArithmeticError,
+                },
+                'math': math,
+                'decimal': decimal,
+                'Decimal': decimal.Decimal,
+                'statistics': statistics,
+                'itertools': itertools,
+                'date': _date,
+                'datetime': _datetime,
+                'timedelta': _timedelta,
+            }
+
+            stdout_capture = io.StringIO()
+            safe_locals = {}
+
+            # Run with a timeout to prevent infinite loops
+            import signal
+
+            def _timeout_handler(signum, frame):
+                raise TimeoutError('Code execution timed out (5s limit)')
+
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(5)  # 5 second limit
+            try:
+                with contextlib.redirect_stdout(stdout_capture):
+                    exec(compile(code, '<ai_calc>', 'exec'), safe_globals, safe_locals)
+            finally:
+                signal.alarm(0)  # cancel alarm
+                signal.signal(signal.SIGALRM, old_handler)
+
+            output = stdout_capture.getvalue()
+            if not output.strip():
+                # If nothing was printed, try to get the last expression value
+                # by re-evaluating the last line as an expression
+                lines = [l for l in code.strip().splitlines() if l.strip() and not l.strip().startswith('#')]
+                if lines:
+                    try:
+                        last_val = eval(lines[-1], safe_globals, safe_locals)
+                        if last_val is not None:
+                            output = repr(last_val)
+                    except Exception:
+                        pass
+
+            if not output.strip():
+                output = '(no output)'
+
+            # Limit output size
+            if len(output) > 10000:
+                output = output[:10000] + '\n... (truncated)'
+
+            return {'output': output.strip()}
+        except Exception as e:
+            return {'error': f'{type(e).__name__}: {str(e)}'}
+
     if name == 'web_search':
         import httpx
         query = args.get('query', '')
@@ -1427,7 +1565,7 @@ READ_ONLY_TOOLS = {
     'list_depreciation_categories', 'list_accounts',
     'get_transaction', 'get_asset',
     'get_settings', 'get_dashboard_summary', 'list_users',
-    'fetch_url', 'web_search',
+    'fetch_url', 'web_search', 'python_eval',
 }
 
 # Human-readable labels for tool calls
@@ -1465,6 +1603,7 @@ TOOL_LABELS = {
     'delete_user': '🗑️ Benutzer löschen',
     'fetch_url': '🌐 Webseite abrufen',
     'web_search': '🔍 Websuche',
+    'python_eval': '🧮 Berechnung ausführen',
 }
 
 # German labels for argument keys (for display)
@@ -1495,6 +1634,7 @@ ARG_LABELS = {
     'quantity': 'Stückzahl', 'ids': 'IDs',
     'account_id': 'Konto-ID', 'from_account_id': 'Von-Konto-ID',
     'to_account_id': 'Nach-Konto-ID', 'initial_balance': 'Startsaldo',
+    'code': 'Python-Code',
 }
 
 
@@ -1674,6 +1814,15 @@ Monetary values are in EUR. Dates are YYYY-MM-DD.
 The current date is {today}.
 
 You have web access via `web_search` (DuckDuckGo) and `fetch_url` tools. Use them to look up current information when needed (e.g. tax rates, exchange rates, legal info, AfA tables).
+
+You have a `python_eval` tool that executes Python code in a sandbox. Use it for ANY calculations:
+- Arithmetic (addition, subtraction, multiplication, division)
+- Percentages, tax calculations, profit margins
+- Date calculations (days between dates, deadlines)
+- Statistical analysis (averages, sums, min/max over data)
+- Currency conversions, compound interest, depreciation schedules
+- Any complex math the user asks about
+Always use `python_eval` instead of doing mental math – it's more reliable. Available modules: math, decimal, Decimal, statistics, itertools, date, datetime, timedelta.
 """
 
 
