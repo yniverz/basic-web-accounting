@@ -833,7 +833,49 @@ def bundle_edit(bundle_id):
                     total_net = total_gross
                     total_tax = 0.0
 
-            count = len(items)
+            new_quantity = request.form.get('quantity', type=int) or len(items)
+            old_count = len(items)
+
+            # Handle quantity changes
+            disposed_items = [a for a in items if a.disposal_date is not None]
+            active_items = [a for a in items if a.disposal_date is None]
+            min_quantity = len(disposed_items)  # can't go below disposed count
+
+            if new_quantity < min_quantity:
+                flash(f'Stückzahl kann nicht unter {min_quantity} reduziert werden ({min_quantity} bereits abgegangen).', 'error')
+                return redirect(request.url)
+
+            if new_quantity < old_count:
+                # Remove excess active items (from the end)
+                to_remove = old_count - new_quantity
+                # Sort active items by id desc so we remove the last ones first
+                removable = sorted(active_items, key=lambda a: a.id, reverse=True)
+                for a in removable[:to_remove]:
+                    if a.document_filename:
+                        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
+                        # Don't remove shared files yet, handled below
+                    db.session.delete(a)
+                    items.remove(a)
+            elif new_quantity > old_count:
+                # Add new items with same properties as representative
+                import uuid
+                for _ in range(new_quantity - old_count):
+                    new_asset = Asset(
+                        bundle_id=bundle_id,
+                        name='',  # will be set below
+                        purchase_date=representative.purchase_date,
+                        purchase_price_gross=0,  # will be set below
+                        purchase_price_net=0,
+                        depreciation_method=representative.depreciation_method,
+                        useful_life_months=representative.useful_life_months,
+                        salvage_value=representative.salvage_value or 0,
+                        depreciation_category_id=representative.depreciation_category_id,
+                        document_filename=representative.document_filename,
+                    )
+                    db.session.add(new_asset)
+                    items.append(new_asset)
+
+            count = new_quantity
             unit_gross = round(total_gross / count, 2)
             unit_net = round(total_net / count, 2)
             unit_tax = round(total_tax / count, 2)
@@ -851,6 +893,8 @@ def bundle_edit(bundle_id):
                 new_filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
                 file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], new_filename))
 
+            # Sort items by id for consistent numbering
+            items.sort(key=lambda a: a.id)
             for i, a in enumerate(items, 1):
                 a.name = f"{new_base_name} ({i}/{count})"
                 a.description = description
@@ -874,7 +918,10 @@ def bundle_edit(bundle_id):
                     a.document_filename = new_filename
 
             db.session.commit()
-            flash(f'Bündel "{new_base_name}" ({count} Stk.) wurde aktualisiert.', 'success')
+            qty_info = ''
+            if new_quantity != old_count:
+                qty_info = f' (Stückzahl: {old_count} → {new_quantity})'
+            flash(f'Bündel "{new_base_name}" ({count} Stk.) wurde aktualisiert.{qty_info}', 'success')
             return redirect(url_for('admin.assets'))
         except Exception as e:
             flash(f'Fehler beim Aktualisieren: {str(e)}', 'error')
@@ -885,6 +932,7 @@ def bundle_edit(bundle_id):
     # Compute total prices for the bundle
     total_gross = sum(a.purchase_price_gross for a in items)
     total_net = sum(a.purchase_price_net for a in items)
+    disposed_count = sum(1 for a in items if a.disposal_date is not None)
 
     return render_template('bundle_edit.html',
                            items=items,
@@ -893,6 +941,7 @@ def bundle_edit(bundle_id):
                            representative=representative,
                            total_gross=total_gross,
                            total_net=total_net,
+                           disposed_count=disposed_count,
                            methods=DEPRECIATION_METHODS,
                            depreciation_categories=dep_cats,
                            settings=settings,

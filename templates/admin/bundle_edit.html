@@ -37,6 +37,16 @@
                    placeholder="Optionale Details (Seriennummer, Modell, etc.)">
         </div>
 
+        <div class="form-group">
+            <label for="quantity">Stückzahl</label>
+            <input type="number" id="quantity" name="quantity" min="{{ disposed_count or 1 }}" value="{{ items|length }}"
+                   oninput="updateQuantityHint()">
+            <span class="text-muted text-xs mt-4 d-inline" id="quantity-hint"></span>
+            {% if disposed_count > 0 %}
+            <span class="text-muted text-xs mt-4 d-inline" style="color: var(--color-warning);">Minimum: {{ disposed_count }} (bereits abgegangen)</span>
+            {% endif %}
+        </div>
+
         <hr class="section-divider">
         <div class="card-header">Anschaffung</div>
 
@@ -87,7 +97,7 @@
 
         <div class="form-row">
             <div class="form-group" id="purchase_gross_group">
-                <label for="purchase_price_gross">Gesamtpreis Brutto (€) <span class="text-muted text-sm">— für alle {{ items|length }} Stück</span></label>
+                <label for="purchase_price_gross">Gesamtpreis Brutto (€) <span class="text-muted text-sm">— <span data-qty-label>für alle {{ items|length }} Stück</span></span></label>
                 <input type="number" id="purchase_price_gross" name="purchase_price_gross"
                        step="0.01" min="0.01"
                        value="{{ total_gross|round(2) }}" required
@@ -95,7 +105,7 @@
                        oninput="recalcPurchase()">
             </div>
             <div class="form-group" id="purchase_net_group" style="display: none;">
-                <label for="purchase_price_net">Gesamtpreis Netto (€) <span class="text-muted text-sm">— für alle {{ items|length }} Stück</span></label>
+                <label for="purchase_price_net">Gesamtpreis Netto (€) <span class="text-muted text-sm">— <span data-qty-label>für alle {{ items|length }} Stück</span></span></label>
                 <input type="number" id="purchase_price_net" name="purchase_price_net"
                        step="0.01" min="0.01"
                        value="{{ total_net|round(2) }}"
@@ -338,9 +348,35 @@ function applyCategoryDefaults() {
     }
 }
 
+function updateQuantityHint() {
+    var qtyEl = document.getElementById('quantity');
+    var hint = document.getElementById('quantity-hint');
+    if (!qtyEl || !hint) return;
+    var qty = parseInt(qtyEl.value) || 1;
+    var original = {{ items|length }};
+    if (qty > original) {
+        hint.textContent = (qty - original) + ' neue(s) Anlagegut/-güter werden hinzugefügt. Der Gesamtpreis wird durch ' + qty + ' geteilt.';
+        hint.style.color = '';
+    } else if (qty < original) {
+        hint.textContent = (original - qty) + ' Anlagegut/-güter werden entfernt (die zuletzt erstellten aktiven). Der Gesamtpreis wird durch ' + qty + ' geteilt.';
+        hint.style.color = 'var(--color-warning)';
+    } else {
+        hint.textContent = '';
+    }
+    // Update name suffix hints
+    var nameHint = document.querySelector('#name + .text-muted');
+    if (nameHint) nameHint.textContent = 'Jedes Stück erhält automatisch den Zusatz "(1/' + qty + ')", "(2/' + qty + ')", etc.';
+    // Update price labels
+    var labels = document.querySelectorAll('[data-qty-label]');
+    labels.forEach(function(el) { el.textContent = 'für alle ' + qty + ' Stück'; });
+    bundleCount = qty;
+    recalcPurchase();
+}
+
 // Initialize
 updateMethodFields();
 updatePurchaseTax();
 recalcPurchase();
+updateQuantityHint();
 </script>
 {% endblock %}

@@ -280,7 +280,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "edit_asset",
-            "description": "Edit an existing asset by ID. To edit ALL assets in a bundle at once, pass bundle_id instead of id. When editing a bundle: name is the base name (suffixes are auto-generated), purchase_price_gross is the TOTAL price for all items (split equally).",
+            "description": "Edit an existing asset by ID. To edit ALL assets in a bundle at once, pass bundle_id instead of id. When editing a bundle: name is the base name (suffixes are auto-generated), purchase_price_gross is the TOTAL price for all items (split equally). You can change the quantity to add or remove items.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -290,6 +290,7 @@ TOOL_DEFINITIONS = [
                     "description": {"type": "string"},
                     "purchase_date": {"type": "string"},
                     "purchase_price_gross": {"type": "number", "description": "For bundles: TOTAL price for all items"},
+                    "quantity": {"type": "integer", "description": "New quantity for the bundle (only with bundle_id). Increases add items, decreases remove the last active ones."},
                     "depreciation_method": {"type": "string"},
                     "useful_life_months": {"type": "integer"},
                     "salvage_value": {"type": "number"},
@@ -822,6 +823,46 @@ def execute_tool(name, args):
             items = Asset.query.filter_by(bundle_id=args['bundle_id']).order_by(Asset.id).all()
             if not items:
                 return {'error': f"Bundle {args['bundle_id']} not found"}
+
+            # Handle quantity changes
+            new_quantity = args.get('quantity')
+            if new_quantity is not None:
+                old_count = len(items)
+                disposed_items = [a for a in items if a.disposal_date is not None]
+                active_items = [a for a in items if a.disposal_date is None]
+                min_qty = len(disposed_items)
+
+                if new_quantity < 1:
+                    return {'error': 'Quantity must be at least 1'}
+                if new_quantity < min_qty:
+                    return {'error': f'Cannot reduce below {min_qty} (already disposed)'}
+
+                if new_quantity < old_count:
+                    # Remove excess active items (last ones first)
+                    to_remove = old_count - new_quantity
+                    removable = sorted(active_items, key=lambda a: a.id, reverse=True)
+                    for a in removable[:to_remove]:
+                        db.session.delete(a)
+                        items.remove(a)
+                elif new_quantity > old_count:
+                    rep = items[0]
+                    for _ in range(new_quantity - old_count):
+                        new_asset = Asset(
+                            bundle_id=args['bundle_id'],
+                            name='',
+                            purchase_date=rep.purchase_date,
+                            purchase_price_gross=0,
+                            purchase_price_net=0,
+                            depreciation_method=rep.depreciation_method,
+                            useful_life_months=rep.useful_life_months,
+                            salvage_value=rep.salvage_value or 0,
+                            depreciation_category_id=rep.depreciation_category_id,
+                            document_filename=rep.document_filename,
+                        )
+                        db.session.add(new_asset)
+                        items.append(new_asset)
+                    db.session.flush()  # assign IDs to new items
+
             count = len(items)
             # For bundles, 'name' is the base name
             base_name = args.get('name')
@@ -835,9 +876,16 @@ def execute_tool(name, args):
                 unit_net, unit_tax, eff_rate = _apply_tax(unit_gross, tax_treatment, settings, args.get('custom_tax_rate'))
             simple_fields = ['description', 'depreciation_method', 'useful_life_months',
                              'salvage_value', 'depreciation_category_id', 'notes']
+            items.sort(key=lambda a: a.id)
             for i, a in enumerate(items, 1):
                 if base_name:
                     a.name = f"{base_name} ({i}/{count})"
+                elif new_quantity is not None:
+                    # Re-number even without a new name
+                    old_base = a.name.rsplit(' (', 1)[0] if '(' in a.name else a.name
+                    if not old_base:
+                        old_base = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
+                    a.name = f"{old_base} ({i}/{count})"
                 for k in simple_fields:
                     if k in args:
                         setattr(a, k, args[k])
