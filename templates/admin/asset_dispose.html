@@ -141,26 +141,24 @@
             </div>
         </div>
 
-        {% if not is_edit %}
         <!-- Optional: Book disposal proceeds to account -->
         <hr class="section-divider">
         <div class="card-header">Kontobuchung</div>
         <div class="form-group">
             <label class="radio-label">
-                <input type="checkbox" name="book_inflow" id="book_inflow" value="1" onchange="toggleInflowAccount()">
+                <input type="checkbox" name="book_inflow" id="book_inflow" value="1" {{ 'checked' if not is_edit or existing_disposal_tx }} onchange="toggleInflowAccount()">
                 Zugang auf Konto buchen
             </label>
             <span class="text-muted text-xs d-inline">Erstellt eine verknüpfte Buchung als Kontozugang (erscheint nicht in der EÜR)</span>
         </div>
-        <div class="form-group" id="inflow_account_group" style="display: none;">
+        <div class="form-group" id="inflow_account_group" {% if is_edit and not existing_disposal_tx %}style="display: none;"{% endif %}>
             <label for="inflow_account_id">Konto</label>
             <select id="inflow_account_id" name="inflow_account_id">
                 {% for acc in accounts %}
-                <option value="{{ acc.id }}">{{ acc.name }}</option>
+                <option value="{{ acc.id }}" {{ 'selected' if existing_disposal_tx and existing_disposal_tx.account_id == acc.id }}>{{ acc.name }}</option>
                 {% endfor %}
             </select>
         </div>
-        {% endif %}
 
         <hr class="section-divider">
 

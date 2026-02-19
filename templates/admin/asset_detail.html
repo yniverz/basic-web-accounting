@@ -203,31 +203,31 @@
 </div>
 {% endif %}
 
-<!-- Linked Account Transaction -->
+<!-- Linked Account Transaction (Purchase) -->
 <div class="card">
-    <div class="card-header">Kontobuchung</div>
+    <div class="card-header">Kontobuchung (Kauf)</div>
     {% if asset.bundle_id %}
     <p class="text-muted text-sm mb-16">Dieses Anlagegut ist Teil eines Bündels. Die Kontobuchung für den Kauf wird über die Bündel-Detailseite verwaltet.</p>
     <a href="{{ url_for('admin.bundle_detail', bundle_id=asset.bundle_id) }}" class="btn btn-sm btn-outline">→ Bündel-Details öffnen</a>
-    {% elif linked_tx %}
+    {% elif purchase_tx %}
     <div class="form-row">
         <div>
             <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
-            <div>{{ linked_tx.description }}</div>
+            <div>{{ purchase_tx.description }}</div>
         </div>
         <div>
             <div class="text-muted text-sm mb-4">Konto</div>
-            <div>{{ linked_tx.account.name if linked_tx.account else '–' }}</div>
+            <div>{{ purchase_tx.account.name if purchase_tx.account else '–' }}</div>
         </div>
     </div>
     <div class="form-row mt-16">
         <div>
             <div class="text-muted text-sm mb-4">Datum</div>
-            <div>{{ linked_tx.date|date_format }}</div>
+            <div>{{ purchase_tx.date|date_format }}</div>
         </div>
         <div>
             <div class="text-muted text-sm mb-4">Betrag</div>
-            <div>{{ linked_tx.amount|currency }}</div>
+            <div>{{ purchase_tx.amount|currency }}</div>
         </div>
     </div>
     <div class="mt-16">
@@ -248,6 +248,55 @@
     </form>
     {% endif %}
 </div>
+
+<!-- Linked Account Transaction (Disposal) -->
+{% if asset.disposal_date %}
+<div class="card">
+    <div class="card-header">Kontobuchung (Veräußerung)</div>
+    {% if disposal_tx %}
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
+            <div>{{ disposal_tx.description }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Konto</div>
+            <div>{{ disposal_tx.account.name if disposal_tx.account else '–' }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Datum</div>
+            <div>{{ disposal_tx.date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Betrag</div>
+            <div>{{ disposal_tx.amount|currency }}</div>
+        </div>
+    </div>
+    <div class="mt-16">
+        <form method="POST" action="{{ url_for('admin.asset_unlink_disposal_inflow', id=asset.id) }}"
+              onsubmit="return confirm('Veräußerungsbuchung wirklich entfernen?')">
+            <button type="submit" class="btn btn-sm btn-outline text-danger">Buchung entfernen</button>
+        </form>
+    </div>
+    {% else %}
+    <p class="text-muted text-sm mb-16">Keine Veräußerungsbuchung vorhanden. Sie können nachträglich einen Zugang auf ein Konto buchen (erscheint nicht in der EÜR).</p>
+    {% if asset.disposal_price_gross and asset.disposal_price_gross > 0 %}
+    <form method="POST" action="{{ url_for('admin.asset_book_disposal_inflow', id=asset.id) }}" class="d-flex gap-10 align-center">
+        <select name="inflow_account_id" required style="width: auto;">
+            {% for acc in accounts %}
+            <option value="{{ acc.id }}">{{ acc.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary">Zugang buchen ({{ asset.disposal_price_gross|currency }})</button>
+    </form>
+    {% else %}
+    <p class="text-muted text-sm">Kein Verkaufserlös vorhanden.</p>
+    {% endif %}
+    {% endif %}
+</div>
+{% endif %}
 
 <!-- Depreciation Schedule -->
 <div class="card">

@@ -137,12 +137,12 @@
         <div class="card-header">Kontobuchung</div>
         <div class="form-group">
             <label class="radio-label">
-                <input type="checkbox" name="book_inflow" id="book_inflow" value="1" onchange="toggleInflowAccount()">
+                <input type="checkbox" name="book_inflow" id="book_inflow" value="1" checked onchange="toggleInflowAccount()">
                 Zugang auf Konto buchen
             </label>
             <span class="text-muted text-xs d-inline">Erstellt eine verknüpfte Buchung als Kontozugang (erscheint nicht in der EÜR)</span>
         </div>
-        <div class="form-group" id="inflow_account_group" style="display: none;">
+        <div class="form-group" id="inflow_account_group">
             <label for="inflow_account_id">Konto</label>
             <select id="inflow_account_id" name="inflow_account_id">
                 {% for acc in accounts %}

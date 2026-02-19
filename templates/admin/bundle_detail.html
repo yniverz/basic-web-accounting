@@ -113,25 +113,25 @@
 <!-- Purchase Account Booking -->
 <div class="card">
     <div class="card-header">Kontobuchung (Kauf)</div>
-    {% if linked_tx %}
+    {% if purchase_tx %}
     <div class="form-row">
         <div>
             <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
-            <div>{{ linked_tx.description }}</div>
+            <div>{{ purchase_tx.description }}</div>
         </div>
         <div>
             <div class="text-muted text-sm mb-4">Konto</div>
-            <div>{{ linked_tx.account.name if linked_tx.account else '–' }}</div>
+            <div>{{ purchase_tx.account.name if purchase_tx.account else '–' }}</div>
         </div>
     </div>
     <div class="form-row mt-16">
         <div>
             <div class="text-muted text-sm mb-4">Datum</div>
-            <div>{{ linked_tx.date|date_format }}</div>
+            <div>{{ purchase_tx.date|date_format }}</div>
         </div>
         <div>
             <div class="text-muted text-sm mb-4">Betrag</div>
-            <div>{{ linked_tx.amount|currency }}</div>
+            <div>{{ purchase_tx.amount|currency }}</div>
         </div>
     </div>
     <div class="mt-16">
@@ -154,22 +154,45 @@
 </div>
 
 <!-- Disposal Account Bookings -->
-{% if disposal_txs %}
+{% if disposed_count > 0 %}
 <div class="card">
     <div class="card-header">Kontobuchungen (Veräußerung)</div>
+    {% if disposal_txs %}
     {% for dtx in disposal_txs %}
     <div class="form-row {% if not loop.first %}mt-16{% endif %}">
         <div>
             <div class="text-muted text-sm mb-4">{{ dtx.description }}</div>
             <div>{{ dtx.date|date_format }} — {{ dtx.amount|currency }}</div>
         </div>
-        <div>
-            <div class="text-muted text-sm mb-4">Konto</div>
-            <div>{{ dtx.account.name if dtx.account else '–' }}</div>
+        <div class="d-flex gap-10 align-center">
+            <div>
+                <div class="text-muted text-sm mb-4">Konto</div>
+                <div>{{ dtx.account.name if dtx.account else '–' }}</div>
+            </div>
+            <form method="POST" action="{{ url_for('admin.bundle_unlink_disposal_inflow', bundle_id=bundle_id, tx_id=dtx.id) }}"
+                  onsubmit="return confirm('Veräußerungsbuchung wirklich entfernen?')">
+                <button type="submit" class="btn btn-sm btn-outline text-danger">Entfernen</button>
+            </form>
         </div>
     </div>
     {% if not loop.last %}<hr class="section-divider">{% endif %}
     {% endfor %}
+    {% endif %}
+
+    {% if disposed_without_tx %}
+    {% if disposal_txs %}<hr class="section-divider">{% endif %}
+    <p class="text-muted text-sm mb-16">{{ disposed_without_tx|length }} abgegangene(s) Item(s) ohne Veräußerungsbuchung. Sie können nachträglich einen Zugang auf ein Konto buchen.</p>
+    <form method="POST" action="{{ url_for('admin.bundle_book_disposal_inflow', bundle_id=bundle_id) }}" class="d-flex gap-10 align-center">
+        <select name="inflow_account_id" required style="width: auto;">
+            {% for acc in accounts %}
+            <option value="{{ acc.id }}">{{ acc.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary">Zugang buchen</button>
+    </form>
+    {% elif not disposal_txs %}
+    <p class="text-muted text-sm">Alle abgegangenen Items haben bereits eine Veräußerungsbuchung.</p>
+    {% endif %}
 </div>
 {% endif %}
 
@@ -217,6 +240,14 @@
 <!-- Delete Bundle -->
 <div class="card">
     <div class="card-header text-danger">Gefahrenzone</div>
+    {% if disposed_count > 0 %}
+    <p class="text-muted text-sm mb-16">Alle {{ disposed_count }} Abgänge in diesem Bündel rückgängig machen (inkl. verknüpfter Veräußerungsbuchungen).</p>
+    <form method="POST" action="{{ url_for('admin.bundle_undispose_all', bundle_id=bundle_id) }}"
+          onsubmit="return confirm('Alle {{ disposed_count }} Abgänge wirklich rückgängig machen?')" class="mb-16">
+        <button type="submit" class="btn btn-warning">Alle Abgänge rückgängig machen ({{ disposed_count }} Stk.)</button>
+    </form>
+    <hr class="section-divider">
+    {% endif %}
     <p class="text-muted text-sm mb-16">Das Löschen des gesamten Bündels kann nicht rückgängig gemacht werden.</p>
     <form method="POST" action="{{ url_for('admin.bundle_delete', bundle_id=bundle_id) }}"
           onsubmit="return confirm('Gesamtes Bündel ({{ items|length }} Stk.) wirklich unwiderruflich löschen?')">
