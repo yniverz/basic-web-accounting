@@ -1183,22 +1183,101 @@ ARG_LABELS = {
 }
 
 
+def _resolve_entity_name(tool_name, entity_id):
+    """Look up a human-readable name for an entity ID based on the tool context."""
+    try:
+        if 'category' in tool_name and 'depreciation' not in tool_name:
+            obj = Category.query.get(entity_id)
+            return obj.name if obj else None
+        if 'depreciation_category' in tool_name:
+            obj = DepreciationCategory.query.get(entity_id)
+            return obj.name if obj else None
+        if 'asset' in tool_name:
+            obj = Asset.query.get(entity_id)
+            return obj.name if obj else None
+        if 'transaction' in tool_name:
+            obj = Transaction.query.get(entity_id)
+            if obj:
+                return f"{obj.date.isoformat()} {obj.amount:.2f}€ ({obj.type})"
+            return None
+        if 'user' in tool_name:
+            obj = User.query.get(entity_id)
+            return obj.username if obj else None
+    except Exception:
+        pass
+    return None
+
+
+def _enrich_args_for_display(tool_name, args):
+    """Return a copy of args with ID fields annotated with entity names for display."""
+    enriched = dict(args)
+
+    # Resolve primary 'id'
+    if 'id' in enriched:
+        label = _resolve_entity_name(tool_name, enriched['id'])
+        if label:
+            enriched['id'] = f"{enriched['id']} ({label})"
+        else:
+            enriched['id'] = f"{enriched['id']} (nicht gefunden ✗)"
+
+    # Resolve 'ids' array
+    if 'ids' in enriched and isinstance(enriched['ids'], list):
+        resolved = []
+        for eid in enriched['ids']:
+            label = _resolve_entity_name(tool_name, eid)
+            if label:
+                resolved.append(f"{eid} ({label})")
+            else:
+                resolved.append(f"{eid} (nicht gefunden ✗)")
+        enriched['ids'] = ', '.join(resolved)
+
+    # Resolve 'category_id'
+    if 'category_id' in enriched:
+        cat = Category.query.get(enriched['category_id'])
+        if cat:
+            enriched['category_id'] = f"{enriched['category_id']} ({cat.name})"
+        else:
+            enriched['category_id'] = f"{enriched['category_id']} (nicht gefunden ✗)"
+
+    # Resolve 'depreciation_category_id'
+    if 'depreciation_category_id' in enriched:
+        dc = DepreciationCategory.query.get(enriched['depreciation_category_id'])
+        if dc:
+            enriched['depreciation_category_id'] = f"{enriched['depreciation_category_id']} ({dc.name})"
+        else:
+            enriched['depreciation_category_id'] = f"{enriched['depreciation_category_id']} (nicht gefunden ✗)"
+
+    return enriched
+
+
 def _summarize_result(name, result):
     """Create a short German summary of a tool result."""
     if isinstance(result, list):
         return f'{len(result)} Ergebnis(se)'
     if isinstance(result, dict):
         if 'error' in result:
-            return f"Fehler: {result['error']}"
+            return f"⚠ {result['error']}"
         status = result.get('status', '')
+        # Include entity name in summary when available
+        entity = (result.get('asset') or result.get('category') or
+                  result.get('transaction') or result.get('depreciation_category') or
+                  result.get('user') or {})
+        entity_name = entity.get('name') or entity.get('username') or ''
+        suffix = f' — {entity_name}' if entity_name else ''
         if status == 'created':
-            return 'Erstellt ✓'
+            qty = result.get('quantity')
+            if qty and qty > 1:
+                return f'{qty}× erstellt ✓{suffix}'
+            return f'Erstellt ✓{suffix}'
         if status == 'updated':
-            return 'Aktualisiert ✓'
+            return f'Aktualisiert ✓{suffix}'
         if status == 'deleted':
-            return 'Gelöscht ✓'
+            return f'Gelöscht ✓{suffix}'
         if status == 'disposed':
-            return 'Abgang erfasst ✓'
+            count = result.get('count')
+            if count and count > 1:
+                return f'{count}× Abgang erfasst ✓'
+            return f'Abgang erfasst ✓{suffix}'
         return 'OK'
     return str(result)[:80]
 
@@ -1327,7 +1406,7 @@ def _call_openai(messages, api_key, model, base_url=None, tool_calls_log=None):
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': _enrich_args_for_display(fn_name, fn_args),
                     'is_write': False,
                     'result_summary': _summarize_result(fn_name, result),
                 })
@@ -1337,10 +1416,11 @@ def _call_openai(messages, api_key, model, base_url=None, tool_calls_log=None):
                     'content': json.dumps(result, ensure_ascii=False, default=str),
                 })
             else:
+                display_args = _enrich_args_for_display(fn_name, fn_args)
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
                     'is_write': True,
                     'pending': True,
                 })
@@ -1348,7 +1428,8 @@ def _call_openai(messages, api_key, model, base_url=None, tool_calls_log=None):
                     'tool_call_id': tc['id'],
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
+                    'raw_args': fn_args,
                 })
 
         if pending_writes:
@@ -1422,7 +1503,7 @@ def _call_anthropic(messages, api_key, model, tool_calls_log=None):
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': _enrich_args_for_display(fn_name, fn_args),
                     'is_write': False,
                     'result_summary': _summarize_result(fn_name, result),
                 })
@@ -1433,10 +1514,11 @@ def _call_anthropic(messages, api_key, model, tool_calls_log=None):
                 })
             else:
                 all_are_reads = False
+                display_args = _enrich_args_for_display(fn_name, fn_args)
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
                     'is_write': True,
                     'pending': True,
                 })
@@ -1444,7 +1526,8 @@ def _call_anthropic(messages, api_key, model, tool_calls_log=None):
                     'tool_use_id': block['id'],
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
+                    'raw_args': fn_args,
                 })
 
         if all_are_reads:
@@ -1462,7 +1545,8 @@ def _resume_openai(messages, pending, approved, correction, api_key, model, base
     """Resume an OpenAI loop after confirmation/rejection."""
     if approved:
         for p in pending:
-            result = execute_tool(p['name'], p['args'])
+            exec_args = p.get('raw_args', p['args'])
+            result = execute_tool(p['name'], exec_args)
             # Update log entry
             for entry in tool_calls_log:
                 if entry.get('pending') and entry['name'] == p['name'] and entry['args'] == p['args']:
@@ -1510,7 +1594,8 @@ def _resume_anthropic(messages, anthropic_messages, pending, approved, correctio
         if matching_pending:
             p = matching_pending[0]
             if approved:
-                result = execute_tool(p['name'], p['args'])
+                exec_args = p.get('raw_args', p['args'])
+                result = execute_tool(p['name'], exec_args)
                 for entry in tool_calls_log:
                     if entry.get('pending') and entry['name'] == p['name'] and entry['args'] == p['args']:
                         entry['pending'] = False
@@ -1594,7 +1679,7 @@ def _resume_anthropic(messages, anthropic_messages, pending, approved, correctio
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': _enrich_args_for_display(fn_name, fn_args),
                     'is_write': False,
                     'result_summary': _summarize_result(fn_name, result),
                 })
@@ -1605,10 +1690,11 @@ def _resume_anthropic(messages, anthropic_messages, pending, approved, correctio
                 })
             else:
                 all_reads = False
+                display_args = _enrich_args_for_display(fn_name, fn_args)
                 tool_calls_log.append({
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
                     'is_write': True,
                     'pending': True,
                 })
@@ -1616,7 +1702,8 @@ def _resume_anthropic(messages, anthropic_messages, pending, approved, correctio
                     'tool_use_id': block['id'],
                     'name': fn_name,
                     'label': TOOL_LABELS.get(fn_name, fn_name),
-                    'args': fn_args,
+                    'args': display_args,
+                    'raw_args': fn_args,
                 })
 
         if all_reads:
