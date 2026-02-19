@@ -315,9 +315,36 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
+    /* ---- Dismiss pending confirmation ---- */
+    function dismissPending() {
+        if (!pendingState) return;
+        pendingState = null;
+        const card = document.getElementById('confirmationCard');
+        if (card) {
+            // Grey out the card to show it's been invalidated
+            card.style.opacity = '0.45';
+            card.style.pointerEvents = 'none';
+            const btns = card.querySelectorAll('.btn-confirm');
+            btns.forEach(b => b.disabled = true);
+            const ta = card.querySelector('#correctionInput');
+            if (ta) ta.disabled = true;
+            // Add a dismissed notice
+            const notice = document.createElement('div');
+            notice.className = 'text-muted text-sm';
+            notice.style.marginTop = '8px';
+            notice.textContent = '(Durch neue Nachricht ungültig geworden)';
+            const bubble = card.querySelector('.confirmation-bubble');
+            if (bubble) bubble.appendChild(notice);
+        }
+    }
+
     /* ---- API calls ---- */
     async function sendMessage(text) {
         if (isLoading || !text.trim()) return;
+
+        // Invalidate any pending confirmation before sending
+        dismissPending();
+
         isLoading = true;
         sendBtn.disabled = true;
         inputEl.disabled = true;
@@ -345,8 +372,9 @@
 
                 if (data.pending_actions) {
                     isLoading = false;
-                    sendBtn.disabled = true;
-                    inputEl.disabled = true;
+                    sendBtn.disabled = false;
+                    inputEl.disabled = false;
+                    inputEl.focus();
                     return;
                 }
             }
@@ -404,8 +432,9 @@
 
                 if (data.pending_actions) {
                     isLoading = false;
-                    sendBtn.disabled = true;
-                    inputEl.disabled = true;
+                    sendBtn.disabled = false;
+                    inputEl.disabled = false;
+                    inputEl.focus();
                     return;
                 }
             }
