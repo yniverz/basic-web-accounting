@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app, send_from_directory
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory
+from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account
 from werkzeug.security import generate_password_hash
 from helpers import parse_date, parse_amount, calculate_tax, calculate_tax_from_net, get_year_choices, get_month_names, format_currency, TAX_TREATMENT_LABELS, get_tax_rate_for_treatment
 from depreciation import (
@@ -57,6 +57,9 @@ def dashboard():
     # Recent transactions (last 10)
     recent = transactions[:10]
 
+    # Account balances
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
+
     return render_template('dashboard.html',
                            year=year,
                            years=get_year_choices(),
@@ -65,7 +68,8 @@ def dashboard():
                            profit=profit,
                            monthly_data=monthly_data,
                            recent_transactions=recent,
-                           transaction_count=len(transactions))
+                           transaction_count=len(transactions),
+                           accounts=accounts)
 
 
 # --- Transactions ---
@@ -76,18 +80,24 @@ def transactions():
     month = request.args.get('month', 0, type=int)
     type_filter = request.args.get('type', '')
     category_id = request.args.get('category', 0, type=int)
+    account_id = request.args.get('account', 0, type=int)
 
     query = Transaction.query.filter(db.extract('year', Transaction.date) == year)
 
     if month > 0:
         query = query.filter(db.extract('month', Transaction.date) == month)
-    if type_filter in ('income', 'expense'):
+    if type_filter in ('income', 'expense', 'transfer'):
         query = query.filter(Transaction.type == type_filter)
     if category_id > 0:
         query = query.filter(Transaction.category_id == category_id)
+    if account_id > 0:
+        query = query.filter(
+            (Transaction.account_id == account_id) | (Transaction.transfer_to_account_id == account_id)
+        )
 
     transactions_list = query.order_by(Transaction.date.desc()).all()
     categories = Category.query.order_by(Category.sort_order, Category.name).all()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
 
     total_income = sum(t.amount for t in transactions_list if t.type == 'income')
     total_expenses = sum(t.amount for t in transactions_list if t.type == 'expense')
@@ -95,10 +105,12 @@ def transactions():
     return render_template('transactions.html',
                            transactions=transactions_list,
                            categories=categories,
+                           accounts=accounts,
                            year=year,
                            month=month,
                            type_filter=type_filter,
                            category_id=category_id,
+                           account_id=account_id,
                            years=get_year_choices(),
                            months=get_month_names(),
                            total_income=total_income,
@@ -115,6 +127,7 @@ def transaction_new():
                 description=request.form.get('description', '').strip(),
                 amount=0,  # will be set below
                 category_id=request.form.get('category_id', type=int) or None,
+                account_id=request.form.get('account_id', type=int) or None,
                 notes=request.form.get('notes', '').strip() or None,
             )
 
@@ -167,9 +180,11 @@ def transaction_new():
 
     categories = Category.query.order_by(Category.sort_order, Category.name).all()
     settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('transaction_form.html',
                            transaction=None,
                            categories=categories,
+                           accounts=accounts,
                            settings=settings,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
@@ -179,12 +194,23 @@ def transaction_new():
 def transaction_edit(id):
     t = Transaction.query.get_or_404(id)
 
+    # Linked asset transactions cannot be edited directly
+    if t.linked_asset_id:
+        flash('Diese Buchung ist mit einem Anlagegut verknüpft und kann nicht direkt bearbeitet werden.', 'error')
+        return redirect(url_for('admin.transactions'))
+
+    # Transfer transactions cannot be edited via the regular form
+    if t.type == 'transfer':
+        flash('Umbuchungen können nicht über das Buchungsformular bearbeitet werden.', 'error')
+        return redirect(url_for('admin.transactions'))
+
     if request.method == 'POST':
         try:
             t.date = parse_date(request.form.get('date'))
             t.type = request.form.get('type', 'expense')
             t.description = request.form.get('description', '').strip()
             t.category_id = request.form.get('category_id', type=int) or None
+            t.account_id = request.form.get('account_id', type=int) or None
             t.notes = request.form.get('notes', '').strip() or None
 
             # Tax treatment
@@ -240,9 +266,11 @@ def transaction_edit(id):
 
     categories = Category.query.order_by(Category.sort_order, Category.name).all()
     settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('transaction_form.html',
                            transaction=t,
                            categories=categories,
+                           accounts=accounts,
                            settings=settings,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            today=date.today().isoformat())
@@ -251,6 +279,10 @@ def transaction_edit(id):
 @admin_bp.route('/transactions/<int:id>/delete', methods=['POST'])
 def transaction_delete(id):
     t = Transaction.query.get_or_404(id)
+    # Linked asset transactions cannot be deleted directly
+    if t.linked_asset_id:
+        flash('Diese Buchung ist mit einem Anlagegut verknüpft und kann nicht direkt gelöscht werden.', 'error')
+        return redirect(url_for('admin.transactions'))
     if t.document_filename:
         filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
         if os.path.exists(filepath):
@@ -379,6 +411,147 @@ def depreciation_category_delete(id):
     return redirect(url_for('admin.depreciation_categories'))
 
 
+# --- Accounts (Konten) ---
+
+@admin_bp.route('/accounts')
+def accounts():
+    accounts_list = Account.query.order_by(Account.sort_order, Account.name).all()
+    for acc in accounts_list:
+        acc._balance = acc.get_balance()
+    return render_template('accounts.html', accounts=accounts_list)
+
+
+@admin_bp.route('/accounts/new', methods=['GET', 'POST'])
+def account_new():
+    if request.method == 'POST':
+        acc = Account(
+            name=request.form.get('name', '').strip(),
+            description=request.form.get('description', '').strip() or None,
+            initial_balance=parse_amount(request.form.get('initial_balance', '0')),
+            sort_order=request.form.get('sort_order', 0, type=int),
+        )
+        db.session.add(acc)
+        db.session.commit()
+        flash('Konto wurde erstellt.', 'success')
+        return redirect(url_for('admin.accounts'))
+    return render_template('account_form.html', account=None)
+
+
+@admin_bp.route('/accounts/<int:id>/edit', methods=['GET', 'POST'])
+def account_edit(id):
+    acc = Account.query.get_or_404(id)
+    if request.method == 'POST':
+        acc.name = request.form.get('name', '').strip()
+        acc.description = request.form.get('description', '').strip() or None
+        acc.initial_balance = parse_amount(request.form.get('initial_balance', '0'))
+        acc.sort_order = request.form.get('sort_order', 0, type=int)
+        db.session.commit()
+        flash('Konto wurde aktualisiert.', 'success')
+        return redirect(url_for('admin.accounts'))
+    return render_template('account_form.html', account=acc)
+
+
+@admin_bp.route('/accounts/<int:id>/delete', methods=['POST'])
+def account_delete(id):
+    acc = Account.query.get_or_404(id)
+    # Check if there are transactions on this account
+    tx_count = Transaction.query.filter(
+        (Transaction.account_id == id) | (Transaction.transfer_to_account_id == id)
+    ).count()
+    if tx_count > 0:
+        flash(f'Konto kann nicht gelöscht werden – es sind noch {tx_count} Buchungen zugeordnet.', 'error')
+        return redirect(url_for('admin.accounts'))
+    db.session.delete(acc)
+    db.session.commit()
+    flash('Konto wurde gelöscht.', 'success')
+    return redirect(url_for('admin.accounts'))
+
+
+@admin_bp.route('/accounts/<int:id>')
+def account_detail(id):
+    acc = Account.query.get_or_404(id)
+    year = request.args.get('year', date.today().year, type=int)
+
+    # Get all transactions for this account (as source or transfer target)
+    txns = Transaction.query.filter(
+        (Transaction.account_id == id) | (Transaction.transfer_to_account_id == id)
+    ).filter(
+        db.extract('year', Transaction.date) == year
+    ).order_by(Transaction.date.asc(), Transaction.id.asc()).all()
+
+    # Calculate running balance
+    balance = acc.get_balance(up_to_date=date(year - 1, 12, 31))
+    running = []
+    for t in txns:
+        if t.type == 'transfer':
+            if t.account_id == id:
+                balance -= t.amount
+                direction = 'out'
+            else:
+                balance += t.amount
+                direction = 'in'
+        elif t.type == 'income':
+            if t.account_id == id:
+                balance += t.amount
+                direction = 'in'
+            else:
+                direction = 'in'
+        else:  # expense
+            if t.account_id == id:
+                balance -= t.amount
+                direction = 'out'
+            else:
+                direction = 'out'
+        running.append({'tx': t, 'balance': balance, 'direction': direction})
+
+    total_balance = acc.get_balance()
+
+    return render_template('account_detail.html',
+                           account=acc,
+                           running=running,
+                           total_balance=total_balance,
+                           year=year,
+                           years=get_year_choices())
+
+
+# --- Transfers (Umbuchungen) ---
+
+@admin_bp.route('/transfers/new', methods=['GET', 'POST'])
+def transfer_new():
+    if request.method == 'POST':
+        try:
+            from_id = request.form.get('from_account_id', type=int)
+            to_id = request.form.get('to_account_id', type=int)
+            if not from_id or not to_id or from_id == to_id:
+                flash('Bitte zwei verschiedene Konten auswählen.', 'error')
+            else:
+                amount = parse_amount(request.form.get('amount'))
+                t = Transaction(
+                    date=parse_date(request.form.get('date')),
+                    type='transfer',
+                    description=request.form.get('description', '').strip() or 'Umbuchung',
+                    amount=amount,
+                    net_amount=amount,
+                    tax_amount=0.0,
+                    tax_treatment='none',
+                    tax_rate=0.0,
+                    account_id=from_id,
+                    transfer_to_account_id=to_id,
+                    notes=request.form.get('notes', '').strip() or None,
+                )
+                db.session.add(t)
+                db.session.commit()
+                flash('Umbuchung wurde erstellt.', 'success')
+                return redirect(url_for('admin.transactions'))
+        except Exception as e:
+            flash(f'Fehler bei der Umbuchung: {str(e)}', 'error')
+
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
+    return render_template('transfer_form.html',
+                           accounts=accounts,
+                           today=date.today().isoformat())
+
+
 # --- Assets (Anlagegüter / AfA) ---
 
 @admin_bp.route('/assets')
@@ -496,6 +669,27 @@ def asset_new():
                 db.session.flush()
                 created_ids.append(asset.id)
 
+            # Optional: Create linked cash outflow transaction
+            book_outflow = request.form.get('book_outflow') == '1'
+            outflow_account_id = request.form.get('outflow_account_id', type=int)
+            if book_outflow and outflow_account_id:
+                # Link to first asset (or bundle representative)
+                link_asset_id = created_ids[0]
+                outflow_tx = Transaction(
+                    date=parse_date(request.form.get('purchase_date')),
+                    type='expense',
+                    description=f'Anlagekauf: {base_name}',
+                    amount=gross_val,
+                    net_amount=net_val,
+                    tax_amount=tax_val,
+                    tax_treatment=tax_treatment,
+                    tax_rate=effective_rate,
+                    account_id=outflow_account_id,
+                    linked_asset_id=link_asset_id,
+                    notes=f'Automatisch erstellt bei Anlage von Anlagegut',
+                )
+                db.session.add(outflow_tx)
+
             db.session.commit()
 
             if quantity > 1:
@@ -509,10 +703,12 @@ def asset_new():
 
     dep_cats = DepreciationCategory.query.order_by(DepreciationCategory.sort_order, DepreciationCategory.name).all()
     settings = SiteSettings.get_settings()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('asset_form.html',
                            asset=None,
                            methods=DEPRECIATION_METHODS,
                            depreciation_categories=dep_cats,
+                           accounts=accounts,
                            settings=settings,
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            rules=RULES,
@@ -697,6 +893,8 @@ def asset_undispose(id):
 @admin_bp.route('/assets/<int:id>/delete', methods=['POST'])
 def asset_delete(id):
     asset = Asset.query.get_or_404(id)
+    # Delete linked transactions
+    Transaction.query.filter_by(linked_asset_id=id).delete()
     if asset.document_filename:
         filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], asset.document_filename)
         if os.path.exists(filepath):
@@ -965,6 +1163,8 @@ def bundle_delete(bundle_id):
     # Remove shared document file(s)
     removed_files = set()
     for a in items:
+        # Delete linked transactions
+        Transaction.query.filter_by(linked_asset_id=a.id).delete()
         if a.document_filename and a.document_filename not in removed_files:
             filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
             if os.path.exists(filepath):
@@ -985,6 +1185,9 @@ def report():
 
     transactions = Transaction.query.filter(
         db.extract('year', Transaction.date) == year
+    ).filter(
+        Transaction.type.in_(['income', 'expense']),
+        Transaction.linked_asset_id.is_(None)
     ).order_by(Transaction.date).all()
 
     # Group by category

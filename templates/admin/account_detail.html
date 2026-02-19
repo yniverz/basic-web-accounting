@@ -1,0 +1,96 @@
+{% extends "admin/base.html" %}
+{% block title %}Konto: {{ account.name }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ account.name }}</h1>
+    <div class="d-flex gap-6">
+        <a href="{{ url_for('admin.account_edit', id=account.id) }}" class="btn btn-outline">Bearbeiten</a>
+        <a href="{{ url_for('admin.accounts') }}" class="btn btn-outline">← Alle Konten</a>
+    </div>
+</div>
+
+{% if account.description %}
+<p class="text-muted" style="margin-top:-0.5rem; margin-bottom:1rem;">{{ account.description }}</p>
+{% endif %}
+
+<div class="stats-grid" style="margin-bottom:1.5rem;">
+    <div class="stat-card">
+        <div class="stat-label">Startsaldo</div>
+        <div class="stat-value">{{ account.initial_balance|currency }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Aktueller Saldo</div>
+        <div class="stat-value {{ 'text-danger' if total_balance < 0 }}">{{ total_balance|currency }}</div>
+    </div>
+</div>
+
+<!-- Year filter -->
+<div class="filter-bar">
+    <form method="GET" class="d-flex gap-6 flex-wrap">
+        <select name="year" onchange="this.form.submit()">
+            {% for y in years %}
+            <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header">Kontobewegungen {{ year }}</div>
+    {% if running %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Datum</th>
+                    <th>Beschreibung</th>
+                    <th>Typ</th>
+                    <th style="text-align:right">Eingang</th>
+                    <th style="text-align:right">Ausgang</th>
+                    <th style="text-align:right">Saldo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in running %}
+                <tr>
+                    <td>{{ r.tx.date|date_format }}</td>
+                    <td>
+                        {{ r.tx.description }}
+                        {% if r.tx.type == 'transfer' %}
+                            {% if r.tx.account_id == account.id %}
+                                <span class="text-muted text-sm">→ {{ r.tx.transfer_to_account.name if r.tx.transfer_to_account else '?' }}</span>
+                            {% else %}
+                                <span class="text-muted text-sm">← {{ r.tx.account.name if r.tx.account else '?' }}</span>
+                            {% endif %}
+                        {% endif %}
+                        {% if r.tx.linked_asset_id %}
+                            <span class="badge badge-info" style="margin-left:4px">Anlagegut</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if r.tx.type == 'transfer' %}
+                            <span class="badge">Umbuchung</span>
+                        {% elif r.tx.type == 'income' %}
+                            <span class="badge badge-success">Einnahme</span>
+                        {% else %}
+                            <span class="badge badge-danger">Ausgabe</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align:right">
+                        {% if r.direction == 'in' %}{{ r.tx.amount|currency }}{% else %}–{% endif %}
+                    </td>
+                    <td style="text-align:right">
+                        {% if r.direction == 'out' %}{{ r.tx.amount|currency }}{% else %}–{% endif %}
+                    </td>
+                    <td style="text-align:right" class="{{ 'text-danger' if r.balance < 0 }}">{{ r.balance|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Keine Buchungen für {{ year }}.</div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -4,7 +4,10 @@
 {% block content %}
 <div class="page-header">
     <h1>Buchungen</h1>
-    <a href="{{ url_for('admin.transaction_new') }}" class="btn btn-primary">+ Neue Buchung</a>
+    <div class="d-flex gap-6">
+        <a href="{{ url_for('admin.transfer_new') }}" class="btn btn-outline">↔ Umbuchung</a>
+        <a href="{{ url_for('admin.transaction_new') }}" class="btn btn-primary">+ Neue Buchung</a>
+    </div>
 </div>
 
 <!-- Filters -->
@@ -33,6 +36,7 @@
                 <option value="">Alle</option>
                 <option value="income" {{ 'selected' if type_filter == 'income' }}>Einnahmen</option>
                 <option value="expense" {{ 'selected' if type_filter == 'expense' }}>Ausgaben</option>
+                <option value="transfer" {{ 'selected' if type_filter == 'transfer' }}>Umbuchungen</option>
             </select>
         </div>
         <div class="form-group">
@@ -41,6 +45,15 @@
                 <option value="0">Alle</option>
                 {% for c in categories %}
                 <option value="{{ c.id }}" {{ 'selected' if c.id == category_id }}>{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="account">Konto</label>
+            <select name="account" id="account" style="width: auto;">
+                <option value="0">Alle</option>
+                {% for acc in accounts %}
+                <option value="{{ acc.id }}" {{ 'selected' if acc.id == account_id }}>{{ acc.name }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -71,6 +84,7 @@
                 <tr>
                     <th>Datum</th>
                     <th>Beschreibung</th>
+                    <th>Konto</th>
                     <th>Kategorie</th>
                     <th>Typ</th>
                     <th style="text-align: right;">Brutto</th>
@@ -89,13 +103,26 @@
                     <td>{{ t.date|date_format }}</td>
                     <td>
                         {{ t.description }}
+                        {% if t.linked_asset_id %}
+                        <span class="badge badge-info" style="margin-left:4px">Anlagegut</span>
+                        {% endif %}
                         {% if t.notes %}
                         <br><span class="text-muted text-sm">{{ t.notes[:80] }}{{ '...' if t.notes|length > 80 }}</span>
                         {% endif %}
                     </td>
+                    <td>
+                        {% if t.account %}
+                        {{ t.account.name }}
+                        {% endif %}
+                        {% if t.type == 'transfer' and t.transfer_to_account %}
+                        → {{ t.transfer_to_account.name }}
+                        {% endif %}
+                    </td>
                     <td>{{ t.category.name if t.category else '–' }}</td>
                     <td>
-                        {% if t.type == 'income' %}
+                        {% if t.type == 'transfer' %}
+                        <span class="badge">Umbuchung</span>
+                        {% elif t.type == 'income' %}
                         <span class="badge badge-income">Einnahme</span>
                         {% else %}
                         <span class="badge badge-expense">Ausgabe</span>
@@ -132,10 +159,16 @@
                     </td>
                     <td>
                         <div class="d-flex gap-6">
+                            {% if not t.linked_asset_id and t.type != 'transfer' %}
                             <a href="{{ url_for('admin.transaction_edit', id=t.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
                             <form method="POST" action="{{ url_for('admin.transaction_delete', id=t.id) }}" onsubmit="return confirm('Buchung wirklich löschen?')">
                                 <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
                             </form>
+                            {% elif t.linked_asset_id %}
+                            <a href="{{ url_for('admin.asset_detail', id=t.linked_asset_id) }}" class="btn btn-sm btn-outline">Zum Anlagegut</a>
+                            {% else %}
+                            <span class="text-muted text-sm">Umbuchung</span>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>

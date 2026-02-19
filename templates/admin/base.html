@@ -30,6 +30,7 @@
                     <a class="nav-dropdown-toggle {{ 'active' if request.endpoint and ('transaction' in request.endpoint or request.endpoint == 'admin.report') }}">Buchhaltung</a>
                     <div class="nav-dropdown-menu">
                         <a href="{{ url_for('admin.transactions') }}" class="{{ 'active' if request.endpoint and 'transaction' in request.endpoint }}">Buchungen</a>
+                        <a href="{{ url_for('admin.accounts') }}" class="{{ 'active' if request.endpoint and 'account' in request.endpoint }}">Konten</a>
                         <a href="{{ url_for('admin.report') }}" class="{{ 'active' if request.endpoint == 'admin.report' }}">EÜR-Bericht</a>
                     </div>
                 </div>

@@ -33,6 +33,43 @@
     </div>
 </div>
 
+<!-- Account Balances -->
+{% if accounts %}
+<div class="card">
+    <div class="card-header d-flex justify-between align-center">
+        <span>Kontostände</span>
+        <a href="{{ url_for('admin.accounts') }}" class="btn btn-sm btn-outline">Alle Konten</a>
+    </div>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Konto</th>
+                    <th style="text-align: right;">Saldo</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% set ns = namespace(total=0) %}
+                {% for a in accounts %}
+                {% set bal = a.get_balance() %}
+                {% set ns.total = ns.total + bal %}
+                <tr>
+                    <td><a href="{{ url_for('admin.account_detail', id=a.id) }}">{{ a.name }}</a></td>
+                    <td style="text-align: right;" class="{{ 'text-success' if bal >= 0 else 'text-danger' }}">{{ bal|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr style="font-weight: bold;">
+                    <td>Gesamt</td>
+                    <td style="text-align: right;" class="{{ 'text-success' if ns.total >= 0 else 'text-danger' }}">{{ ns.total|currency }}</td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 <!-- Monthly Overview -->
 <div class="card">
     <div class="card-header">Monatsübersicht {{ year }}</div>
@@ -90,6 +127,8 @@
                     <td>
                         {% if t.type == 'income' %}
                         <span class="badge badge-income">Einnahme</span>
+                        {% elif t.type == 'transfer' %}
+                        <span class="badge badge-muted">Umbuchung</span>
                         {% else %}
                         <span class="badge badge-expense">Ausgabe</span>
                         {% endif %}

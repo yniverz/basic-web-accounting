@@ -2,7 +2,7 @@ import os
 import hashlib
 from flask import Flask, send_file, request
 from flask_login import LoginManager
-from models import db, User, SiteSettings
+from models import db, User, SiteSettings, Account
 from werkzeug.security import generate_password_hash
 from helpers import format_currency, format_date
 
@@ -178,6 +178,9 @@ def _migrate_schema(db):
         ('assets', 'disposal_tax_amount', 'REAL'),
         ('site_settings', 'favicon_filename', 'VARCHAR(200)'),
         ('assets', 'bundle_id', 'VARCHAR(36)'),
+        ('transactions', 'account_id', 'INTEGER'),
+        ('transactions', 'transfer_to_account_id', 'INTEGER'),
+        ('transactions', 'linked_asset_id', 'INTEGER'),
     ]
 
     for table, column, col_type in migrations:
@@ -186,6 +189,35 @@ def _migrate_schema(db):
         except Exception:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
             conn.commit()
+
+    # Ensure accounts table exists (create if missing for pre-accounts databases)
+    try:
+        cursor.execute("SELECT id FROM accounts LIMIT 1")
+    except Exception:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name VARCHAR(200) NOT NULL,
+                description TEXT,
+                initial_balance REAL DEFAULT 0.0,
+                sort_order INTEGER DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+        """)
+        conn.commit()
+
+    # Seed default "Bank" account and assign to existing transactions
+    cursor.execute("SELECT COUNT(*) FROM accounts")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO accounts (name, description, initial_balance, sort_order, created_at, updated_at) "
+            "VALUES ('Bank', 'Standard-Bankkonto', 0.0, 1, datetime('now'), datetime('now'))"
+        )
+        bank_id = cursor.lastrowid
+        # Set all existing transactions to the default bank account
+        cursor.execute("UPDATE transactions SET account_id = ? WHERE account_id IS NULL", (bank_id,))
+        conn.commit()
 
     conn.close()
 

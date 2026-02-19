@@ -22,6 +22,14 @@
                     <option value="expense" {{ 'selected' if not transaction or transaction.type == 'expense' }}>Ausgabe</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label for="account_id">Konto</label>
+                <select id="account_id" name="account_id" required>
+                    {% for acc in accounts %}
+                    <option value="{{ acc.id }}" {{ 'selected' if transaction and transaction.account_id == acc.id }}>{{ acc.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
         </div>
 
         <div class="form-group">

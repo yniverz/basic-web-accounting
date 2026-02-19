@@ -129,6 +129,25 @@
         </div>
         {% endif %}
 
+        {% if not asset %}
+        <!-- Optional: Book cash outflow to account -->
+        <div class="form-group">
+            <label class="radio-label">
+                <input type="checkbox" name="book_outflow" id="book_outflow" value="1" onchange="toggleOutflowAccount()">
+                Abgang vom Konto buchen
+            </label>
+            <span class="text-muted text-xs d-inline">Erstellt eine verknüpfte Buchung als Kontoabgang (nicht in der EÜR)</span>
+        </div>
+        <div class="form-group" id="outflow_account_group" style="display: none;">
+            <label for="outflow_account_id">Konto</label>
+            <select id="outflow_account_id" name="outflow_account_id">
+                {% for acc in accounts %}
+                <option value="{{ acc.id }}">{{ acc.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
         <hr class="section-divider">
         <div class="card-header">Abschreibung</div>
 
@@ -341,5 +360,13 @@ updateMethodFields();
 updatePurchaseTax();
 recalcPurchase();
 updateQuantityHint();
+
+function toggleOutflowAccount() {
+    var cb = document.getElementById('book_outflow');
+    var grp = document.getElementById('outflow_account_group');
+    if (cb && grp) {
+        grp.style.display = cb.checked ? '' : 'none';
+    }
+}
 </script>
 {% endblock %}

@@ -26,7 +26,7 @@ from helpers import (
     TAX_TREATMENT_LABELS,
 )
 from models import (
-    Asset, Category, ChatHistory, DepreciationCategory, SiteSettings, Transaction, User, db,
+    Account, Asset, Category, ChatHistory, DepreciationCategory, SiteSettings, Transaction, User, db,
 )
 from depreciation import (
     DEPRECIATION_METHODS, get_book_value, get_depreciation_for_year,
@@ -137,8 +137,9 @@ TOOL_DEFINITIONS = [
                 "properties": {
                     "year": {"type": "integer", "description": "Filter by year"},
                     "month": {"type": "integer", "description": "Filter by month (1-12)"},
-                    "type_filter": {"type": "string", "enum": ["income", "expense", "all"]},
+                    "type_filter": {"type": "string", "enum": ["income", "expense", "transfer", "all"]},
                     "category_id": {"type": "integer", "description": "Filter by category ID"},
+                    "account_id": {"type": "integer", "description": "Filter by account ID"},
                     "limit": {"type": "integer", "description": "Max results (default 50)"},
                     "search": {"type": "string", "description": "Search in description/notes"},
                 },
@@ -171,6 +172,7 @@ TOOL_DEFINITIONS = [
                     "description": {"type": "string"},
                     "amount": {"type": "number", "description": "Gross amount (brutto)"},
                     "category_id": {"type": "integer", "description": "Category ID (optional)"},
+                    "account_id": {"type": "integer", "description": "Account ID (required)"},
                     "tax_treatment": {
                         "type": "string",
                         "enum": ["none", "standard", "reduced", "tax_free", "reverse_charge", "intra_eu", "custom"],
@@ -179,7 +181,7 @@ TOOL_DEFINITIONS = [
                     "custom_tax_rate": {"type": "number", "description": "Custom tax rate if tax_treatment='custom'"},
                     "notes": {"type": "string"},
                 },
-                "required": ["date", "type", "description", "amount"],
+                "required": ["date", "type", "description", "amount", "account_id"],
             },
         },
     },
@@ -197,6 +199,7 @@ TOOL_DEFINITIONS = [
                     "description": {"type": "string"},
                     "amount": {"type": "number"},
                     "category_id": {"type": "integer"},
+                    "account_id": {"type": "integer"},
                     "tax_treatment": {"type": "string"},
                     "custom_tax_rate": {"type": "number"},
                     "notes": {"type": "string"},
@@ -252,7 +255,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "create_asset",
-            "description": "Create a new depreciable asset. Use quantity > 1 to create a bundle of identical items (e.g. 6 lamps). The purchase_price_gross is the TOTAL price; it will be divided by quantity for each item. Each item depreciates individually.",
+            "description": "Create a new depreciable asset. Use quantity > 1 to create a bundle of identical items (e.g. 6 lamps). The purchase_price_gross is the TOTAL price; it will be divided by quantity for each item. Each item depreciates individually. Optionally pass account_id to create a linked cash outflow transaction (not counted in EÜR).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -270,6 +273,7 @@ TOOL_DEFINITIONS = [
                     "depreciation_category_id": {"type": "integer"},
                     "purchase_tax_treatment": {"type": "string"},
                     "custom_tax_rate": {"type": "number"},
+                    "account_id": {"type": "integer", "description": "Account ID to book a cash outflow transaction (optional, not counted in EÜR)"},
                     "notes": {"type": "string"},
                 },
                 "required": ["name", "purchase_date", "purchase_price_gross"],
@@ -338,6 +342,81 @@ TOOL_DEFINITIONS = [
                     "custom_tax_rate": {"type": "number"},
                 },
                 "required": ["disposal_date", "disposal_reason"],
+            },
+        },
+    },
+    # ---- Accounts ----
+    {
+        "type": "function",
+        "function": {
+            "name": "list_accounts",
+            "description": "List all accounts (Konten) with their current balances.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_account",
+            "description": "Create a new account (e.g. Bargeld, PayPal).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "initial_balance": {"type": "number", "description": "Starting balance (Startsaldo)"},
+                    "sort_order": {"type": "integer"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_account",
+            "description": "Edit an existing account by ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
+                    "initial_balance": {"type": "number"},
+                    "sort_order": {"type": "integer"},
+                },
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_account",
+            "description": "Delete an account by ID. Fails if transactions are still assigned.",
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}},
+                "required": ["id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_transfer",
+            "description": "Create a transfer (Umbuchung) between two accounts. Not counted in EÜR.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {"type": "string", "description": "Date YYYY-MM-DD"},
+                    "from_account_id": {"type": "integer", "description": "Source account ID"},
+                    "to_account_id": {"type": "integer", "description": "Destination account ID"},
+                    "amount": {"type": "number", "description": "Transfer amount"},
+                    "description": {"type": "string", "description": "Description (default 'Umbuchung')"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["date", "from_account_id", "to_account_id", "amount"],
             },
         },
     },
@@ -558,6 +637,11 @@ def _tx_to_dict(t):
         'tax_rate': t.tax_rate,
         'category_id': t.category_id,
         'category_name': t.category.name if t.category else None,
+        'account_id': t.account_id,
+        'account_name': t.account.name if t.account else None,
+        'transfer_to_account_id': t.transfer_to_account_id,
+        'transfer_to_account_name': t.transfer_to_account.name if t.transfer_to_account else None,
+        'linked_asset_id': t.linked_asset_id,
         'notes': t.notes,
         'document_filename': t.document_filename,
     }
@@ -601,6 +685,16 @@ def _dep_cat_to_dict(c):
         'default_method': c.default_method,
         'description': c.description,
         'sort_order': c.sort_order,
+    }
+
+
+def _account_to_dict(a):
+    return {
+        'id': a.id, 'name': a.name,
+        'description': a.description,
+        'initial_balance': a.initial_balance,
+        'current_balance': a.get_balance(),
+        'sort_order': a.sort_order,
     }
 
 
@@ -663,10 +757,15 @@ def execute_tool(name, args):
         if args.get('month'):
             q = q.filter(db.extract('month', Transaction.date) == args['month'])
         tf = args.get('type_filter', 'all')
-        if tf in ('income', 'expense'):
+        if tf in ('income', 'expense', 'transfer'):
             q = q.filter(Transaction.type == tf)
         if args.get('category_id'):
             q = q.filter(Transaction.category_id == args['category_id'])
+        if args.get('account_id'):
+            aid = args['account_id']
+            q = q.filter(
+                (Transaction.account_id == aid) | (Transaction.transfer_to_account_id == aid)
+            )
         if args.get('search'):
             search = f"%{args['search']}%"
             q = q.filter(
@@ -701,6 +800,7 @@ def execute_tool(name, args):
             tax_treatment=tax_treatment,
             tax_rate=eff_rate,
             category_id=args.get('category_id'),
+            account_id=args.get('account_id'),
             notes=args.get('notes'),
         )
         db.session.add(t)
@@ -711,6 +811,10 @@ def execute_tool(name, args):
         t = Transaction.query.get(args['id'])
         if not t:
             return {'error': f"Transaction {args['id']} not found"}
+        if t.linked_asset_id:
+            return {'error': 'Cannot edit a linked asset transaction'}
+        if t.type == 'transfer':
+            return {'error': 'Cannot edit a transfer via edit_transaction. Delete and recreate instead.'}
         if 'date' in args:
             t.date = parse_date(args['date'])
         if 'type' in args:
@@ -719,6 +823,8 @@ def execute_tool(name, args):
             t.description = args['description']
         if 'category_id' in args:
             t.category_id = args['category_id'] or None
+        if 'account_id' in args:
+            t.account_id = args['account_id'] or None
         if 'notes' in args:
             t.notes = args['notes'] or None
 
@@ -742,6 +848,8 @@ def execute_tool(name, args):
         t = Transaction.query.get(args['id'])
         if not t:
             return {'error': f"Transaction {args['id']} not found"}
+        if t.linked_asset_id:
+            return {'error': 'Cannot delete a linked asset transaction. Delete the asset instead.'}
         if t.document_filename:
             from flask import current_app
             fp = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
@@ -804,6 +912,25 @@ def execute_tool(name, args):
             db.session.add(a)
             db.session.flush()
             created.append(a)
+
+        # Optional: create linked cash outflow transaction
+        outflow_account_id = args.get('account_id')
+        if outflow_account_id:
+            link_asset_id = created[0].id
+            outflow_tx = Transaction(
+                date=parse_date(args['purchase_date']),
+                type='expense',
+                description=f'Anlagekauf: {base_name}',
+                amount=total_gross,
+                net_amount=unit_net * quantity,
+                tax_amount=unit_tax * quantity,
+                tax_treatment=tax_treatment,
+                tax_rate=eff_rate,
+                account_id=outflow_account_id,
+                linked_asset_id=link_asset_id,
+                notes='Automatisch erstellt bei Anlage von Anlagegut',
+            )
+            db.session.add(outflow_tx)
 
         db.session.commit()
         if quantity > 1:
@@ -937,6 +1064,7 @@ def execute_tool(name, args):
             count = len(items)
             removed_files = set()
             for a in items:
+                Transaction.query.filter_by(linked_asset_id=a.id).delete()
                 if a.document_filename and a.document_filename not in removed_files:
                     from flask import current_app
                     fp = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
@@ -953,6 +1081,7 @@ def execute_tool(name, args):
         a = Asset.query.get(args['id'])
         if not a:
             return {'error': f"Asset {args['id']} not found"}
+        Transaction.query.filter_by(linked_asset_id=a.id).delete()
         if a.document_filename:
             from flask import current_app
             fp = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
@@ -1006,6 +1135,72 @@ def execute_tool(name, args):
         if errors:
             result['errors'] = errors
         return result
+
+    # ---- Accounts ----
+    if name == 'list_accounts':
+        accs = Account.query.order_by(Account.sort_order, Account.name).all()
+        return [_account_to_dict(a) for a in accs]
+
+    if name == 'create_account':
+        a = Account(
+            name=args['name'],
+            description=args.get('description'),
+            initial_balance=args.get('initial_balance', 0.0),
+            sort_order=args.get('sort_order', 0),
+        )
+        db.session.add(a)
+        db.session.commit()
+        return {'status': 'created', 'account': _account_to_dict(a)}
+
+    if name == 'edit_account':
+        a = Account.query.get(args['id'])
+        if not a:
+            return {'error': f"Account {args['id']} not found"}
+        for k in ('name', 'description', 'initial_balance', 'sort_order'):
+            if k in args:
+                setattr(a, k, args[k])
+        db.session.commit()
+        return {'status': 'updated', 'account': _account_to_dict(a)}
+
+    if name == 'delete_account':
+        a = Account.query.get(args['id'])
+        if not a:
+            return {'error': f"Account {args['id']} not found"}
+        tx_count = Transaction.query.filter(
+            (Transaction.account_id == a.id) | (Transaction.transfer_to_account_id == a.id)
+        ).count()
+        if tx_count > 0:
+            return {'error': f'Account has {tx_count} transactions and cannot be deleted'}
+        db.session.delete(a)
+        db.session.commit()
+        return {'status': 'deleted', 'id': args['id']}
+
+    if name == 'create_transfer':
+        from_id = args['from_account_id']
+        to_id = args['to_account_id']
+        if from_id == to_id:
+            return {'error': 'Source and destination account must be different'}
+        if not Account.query.get(from_id):
+            return {'error': f'Source account {from_id} not found'}
+        if not Account.query.get(to_id):
+            return {'error': f'Destination account {to_id} not found'}
+        amount = args['amount']
+        t = Transaction(
+            date=parse_date(args['date']),
+            type='transfer',
+            description=args.get('description', 'Umbuchung'),
+            amount=amount,
+            net_amount=amount,
+            tax_amount=0.0,
+            tax_treatment='none',
+            tax_rate=0.0,
+            account_id=from_id,
+            transfer_to_account_id=to_id,
+            notes=args.get('notes'),
+        )
+        db.session.add(t)
+        db.session.commit()
+        return {'status': 'created', 'transaction': _tx_to_dict(t)}
 
     # ---- Depreciation Categories ----
     if name == 'list_depreciation_categories':
@@ -1229,7 +1424,8 @@ def execute_tool(name, args):
 # Tools that only read data (no confirmation needed)
 READ_ONLY_TOOLS = {
     'list_categories', 'list_transactions', 'list_assets',
-    'list_depreciation_categories', 'get_transaction', 'get_asset',
+    'list_depreciation_categories', 'list_accounts',
+    'get_transaction', 'get_asset',
     'get_settings', 'get_dashboard_summary', 'list_users',
     'fetch_url', 'web_search',
 }
@@ -1251,6 +1447,11 @@ TOOL_LABELS = {
     'edit_asset': '✏️ Anlagegut bearbeiten',
     'delete_asset': '🗑️ Anlagegut löschen',
     'dispose_asset': '📤 Anlagegut Abgang',
+    'list_accounts': '📋 Konten auflisten',
+    'create_account': '➕ Konto erstellen',
+    'edit_account': '✏️ Konto bearbeiten',
+    'delete_account': '🗑️ Konto löschen',
+    'create_transfer': '↔ Umbuchung erstellen',
     'list_depreciation_categories': '📋 AfA-Kategorien auflisten',
     'create_depreciation_category': '➕ AfA-Kategorie erstellen',
     'edit_depreciation_category': '✏️ AfA-Kategorie bearbeiten',
@@ -1292,6 +1493,8 @@ ARG_LABELS = {
     'url': 'URL', 'max_length': 'Max. Zeichen', 'query': 'Suchbegriff',
     'max_results': 'Max. Ergebnisse',
     'quantity': 'Stückzahl', 'ids': 'IDs',
+    'account_id': 'Konto-ID', 'from_account_id': 'Von-Konto-ID',
+    'to_account_id': 'Nach-Konto-ID', 'initial_balance': 'Startsaldo',
 }
 
 
@@ -1304,10 +1507,13 @@ def _resolve_entity_name(tool_name, entity_id):
         if 'depreciation_category' in tool_name:
             obj = DepreciationCategory.query.get(entity_id)
             return obj.name if obj else None
+        if 'account' in tool_name and 'transfer' not in tool_name:
+            obj = Account.query.get(entity_id)
+            return obj.name if obj else None
         if 'asset' in tool_name:
             obj = Asset.query.get(entity_id)
             return obj.name if obj else None
-        if 'transaction' in tool_name:
+        if 'transaction' in tool_name or 'transfer' in tool_name:
             obj = Transaction.query.get(entity_id)
             if obj:
                 return f"{obj.date.isoformat()} {obj.amount:.2f}€ ({obj.type})"
@@ -1369,6 +1575,30 @@ def _enrich_args_for_display(tool_name, args):
         else:
             enriched['depreciation_category_id'] = f"{enriched['depreciation_category_id']} (nicht gefunden ✗)"
 
+    # Resolve 'account_id'
+    if 'account_id' in enriched:
+        acc = Account.query.get(enriched['account_id'])
+        if acc:
+            enriched['account_id'] = f"{enriched['account_id']} ({acc.name})"
+        else:
+            enriched['account_id'] = f"{enriched['account_id']} (nicht gefunden ✗)"
+
+    # Resolve 'from_account_id'
+    if 'from_account_id' in enriched:
+        acc = Account.query.get(enriched['from_account_id'])
+        if acc:
+            enriched['from_account_id'] = f"{enriched['from_account_id']} ({acc.name})"
+        else:
+            enriched['from_account_id'] = f"{enriched['from_account_id']} (nicht gefunden ✗)"
+
+    # Resolve 'to_account_id'
+    if 'to_account_id' in enriched:
+        acc = Account.query.get(enriched['to_account_id'])
+        if acc:
+            enriched['to_account_id'] = f"{enriched['to_account_id']} ({acc.name})"
+        else:
+            enriched['to_account_id'] = f"{enriched['to_account_id']} (nicht gefunden ✗)"
+
     return enriched
 
 
@@ -1412,8 +1642,11 @@ def _summarize_result(name, result):
 
 SYSTEM_PROMPT_TEMPLATE = """\
 You are a helpful accounting assistant for a German small-business bookkeeping application (EÜR – Einnahmenüberschussrechnung).
-You can query and manipulate ALL data: categories (Buchungskategorien), transactions (Buchungen), assets (Anlagegüter),
-depreciation categories (AfA-Kategorien), business settings, and users.
+You can query and manipulate ALL data: categories (Buchungskategorien), transactions (Buchungen), accounts (Konten),
+assets (Anlagegüter), depreciation categories (AfA-Kategorien), business settings, and users.
+
+Accounts (Konten): Every transaction must be assigned to an account. Transfers between accounts use the create_transfer tool.
+When creating an asset, you can optionally pass account_id to book a linked cash outflow (not counted in EÜR).
 
 Current business settings:
 - Firmenname: {business_name}

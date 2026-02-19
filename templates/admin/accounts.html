@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+{% block title %}Konten - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Konten</h1>
+    <a href="{{ url_for('admin.account_new') }}" class="btn btn-primary">+ Neues Konto</a>
+</div>
+
+<div class="card">
+    {% if accounts %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Beschreibung</th>
+                    <th style="text-align:right">Startsaldo</th>
+                    <th style="text-align:right">Aktueller Saldo</th>
+                    <th>Sortierung</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for acc in accounts %}
+                <tr>
+                    <td class="font-semibold"><a href="{{ url_for('admin.account_detail', id=acc.id) }}">{{ acc.name }}</a></td>
+                    <td class="text-muted text-sm">{{ acc.description or '–' }}</td>
+                    <td style="text-align:right">{{ acc.initial_balance|currency }}</td>
+                    <td style="text-align:right" class="{{ 'text-danger' if acc._balance < 0 else '' }}">{{ acc._balance|currency }}</td>
+                    <td>{{ acc.sort_order }}</td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('admin.account_edit', id=acc.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('admin.account_delete', id=acc.id) }}" onsubmit="return confirm('Konto wirklich löschen?')">
+                                <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">Keine Konten vorhanden.</div>
+    {% endif %}
+</div>
+{% endblock %}
