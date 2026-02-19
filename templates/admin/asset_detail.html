@@ -203,6 +203,49 @@
 </div>
 {% endif %}
 
+<!-- Linked Account Transaction -->
+<div class="card">
+    <div class="card-header">Kontobuchung</div>
+    {% if linked_tx %}
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
+            <div>{{ linked_tx.description }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Konto</div>
+            <div>{{ linked_tx.account.name if linked_tx.account else '–' }}</div>
+        </div>
+    </div>
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Datum</div>
+            <div>{{ linked_tx.date|date_format }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Betrag</div>
+            <div>{{ linked_tx.amount|currency }}</div>
+        </div>
+    </div>
+    <div class="mt-16">
+        <form method="POST" action="{{ url_for('admin.asset_unlink_outflow', id=asset.id) }}"
+              onsubmit="return confirm('Verknüpfte Kontobuchung wirklich löschen?')">
+            <button type="submit" class="btn btn-sm btn-outline text-danger">Kontobuchung entfernen</button>
+        </form>
+    </div>
+    {% else %}
+    <p class="text-muted text-sm mb-16">Keine verknüpfte Kontobuchung vorhanden. Sie können nachträglich einen Abgang vom Konto buchen (erscheint nicht in der EÜR).</p>
+    <form method="POST" action="{{ url_for('admin.asset_book_outflow', id=asset.id) }}" class="d-flex gap-10 align-center">
+        <select name="outflow_account_id" required style="width: auto;">
+            {% for acc in accounts %}
+            <option value="{{ acc.id }}">{{ acc.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-primary">Abgang buchen ({{ asset.purchase_price_gross|currency }})</button>
+    </form>
+    {% endif %}
+</div>
+
 <!-- Depreciation Schedule -->
 <div class="card">
     <div class="card-header">Abschreibungsplan</div>

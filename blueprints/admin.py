@@ -731,6 +731,8 @@ def asset_detail(id):
         bundle_active = sum(1 for s in siblings if s.disposal_date is None)
 
     settings = SiteSettings.get_settings()
+    linked_tx = Transaction.query.filter_by(linked_asset_id=asset.id).first()
+    accounts = Account.query.order_by(Account.sort_order, Account.name).all()
     return render_template('asset_detail.html',
                            asset=asset,
                            schedule=schedule,
@@ -741,7 +743,59 @@ def asset_detail(id):
                            tax_treatment_labels=TAX_TREATMENT_LABELS,
                            current_year=date.today().year,
                            bundle_count=bundle_count,
-                           bundle_active=bundle_active)
+                           bundle_active=bundle_active,
+                           linked_tx=linked_tx,
+                           accounts=accounts)
+
+
+@admin_bp.route('/assets/<int:id>/book-outflow', methods=['POST'])
+def asset_book_outflow(id):
+    asset = Asset.query.get_or_404(id)
+
+    # Check if already has a linked transaction
+    existing = Transaction.query.filter_by(linked_asset_id=asset.id).first()
+    if existing:
+        flash('Es existiert bereits eine verknüpfte Buchung für dieses Anlagegut.', 'warning')
+        return redirect(url_for('admin.asset_detail', id=asset.id))
+
+    account_id = request.form.get('outflow_account_id', type=int)
+    if not account_id:
+        flash('Bitte ein Konto auswählen.', 'error')
+        return redirect(url_for('admin.asset_detail', id=asset.id))
+
+    try:
+        outflow_tx = Transaction(
+            date=asset.purchase_date,
+            type='expense',
+            description=f'Anlagekauf: {asset.name}',
+            amount=asset.purchase_price_gross,
+            net_amount=asset.purchase_price_net,
+            tax_amount=asset.purchase_tax_amount or 0,
+            tax_treatment=asset.purchase_tax_treatment or 'none',
+            tax_rate=asset.purchase_tax_rate or 0,
+            account_id=account_id,
+            linked_asset_id=asset.id,
+            notes='Automatisch erstellt bei nachträglicher Kontobuchung',
+        )
+        db.session.add(outflow_tx)
+        db.session.commit()
+        flash('Kontoabgang wurde gebucht.', 'success')
+    except Exception as e:
+        flash(f'Fehler: {str(e)}', 'error')
+
+    return redirect(url_for('admin.asset_detail', id=asset.id))
+
+
+@admin_bp.route('/assets/<int:id>/unlink-outflow', methods=['POST'])
+def asset_unlink_outflow(id):
+    asset = Asset.query.get_or_404(id)
+    deleted = Transaction.query.filter_by(linked_asset_id=asset.id).delete()
+    db.session.commit()
+    if deleted:
+        flash('Verknüpfte Kontobuchung wurde entfernt.', 'success')
+    else:
+        flash('Keine verknüpfte Buchung gefunden.', 'warning')
+    return redirect(url_for('admin.asset_detail', id=asset.id))
 
 
 @admin_bp.route('/assets/<int:id>/edit', methods=['GET', 'POST'])
