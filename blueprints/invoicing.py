@@ -872,6 +872,9 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
 
     # Try to embed ZUGFeRD XML
     try:
+        import logging as _logging
+        _einv_logger = _logging.getLogger(__name__ + '.einvoice')
+
         from generators.einvoice import get_standard
         from generators.einvoice.base import EInvoiceData, EInvoiceLineItem
         from generators.einvoice.embed import embed_xml_in_pdf
@@ -884,7 +887,7 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
             net_price = round(item.unit_price / tax_factor, 2)
             line_total_net = round(item.total / tax_factor, 2)
             li = EInvoiceLineItem(
-                position_number=str(item.position),
+                position_number=item.position,
                 name=item.description,
                 quantity=item.quantity,
                 unit_code='C62',
@@ -898,10 +901,24 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
         gross_total = invoice.total
         net_total = round(gross_total / tax_factor, 2)
         tax_total = round(gross_total - net_total, 2)
+        lines_net_total = sum(li.line_total_net for li in line_items)
 
         buyer_name = ''
         if invoice.customer:
             buyer_name = invoice.customer.company or invoice.customer.name
+
+        # Parse bank details from bank_lines
+        bank_iban = None
+        bank_bic = None
+        bank_name = None
+        for bl in sd['bank_lines']:
+            bl_upper = bl.upper().strip()
+            if bl_upper.startswith('IBAN'):
+                bank_iban = bl.split(':', 1)[-1].strip().replace(' ', '')
+            elif bl_upper.startswith('BIC'):
+                bank_bic = bl.split(':', 1)[-1].strip().replace(' ', '')
+            elif bl_upper.startswith('BANK'):
+                bank_name = bl.split(':', 1)[-1].strip()
 
         einvoice_data = EInvoiceData(
             invoice_number=invoice.invoice_number,
@@ -914,19 +931,27 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
             buyer_address_lines=invoice.customer.recipient_lines if invoice.customer else [],
             tax_rate=tax_rate,
             tax_mode=sd['tax_mode'],
+            tax_amount=tax_total,
+            line_total_net=lines_net_total,
             total_net=net_total,
-            total_tax=tax_total,
             total_gross=gross_total,
             payment_terms_days=invoice.payment_terms_days or 14,
-            bank_lines=sd['bank_lines'],
+            payment_reference=invoice.invoice_number,
+            bank_iban=bank_iban,
+            bank_bic=bank_bic,
+            bank_name=bank_name,
             line_items=line_items,
         )
 
         standard = get_standard('zugferd')
         xml_bytes = standard.generate_xml(einvoice_data)
         pdf_bytes = embed_xml_in_pdf(pdf_bytes, xml_bytes)
+        _einv_logger.info('ZUGFeRD XML embedded into invoice %s', invoice.invoice_number)
     except Exception:
-        pass  # ZUGFeRD embedding is best-effort
+        import logging as _logging
+        _logging.getLogger(__name__ + '.einvoice').exception(
+            'Failed to embed ZUGFeRD XML into invoice %s', invoice.invoice_number
+        )
 
     # Archive old PDF if exists
     if invoice.document_filename:
