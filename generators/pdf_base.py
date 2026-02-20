@@ -5,8 +5,11 @@ Provides common styles, header/footer drawing, and helper flowables.
 """
 from __future__ import annotations
 
+import logging
 import os
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -110,38 +113,43 @@ def _draw_header(canvas, doc, *,
     canvas.saveState()
 
     # ── Logo (top-right) ──
-    if logo_path and os.path.exists(logo_path):
-        try:
-            max_h = 30 * mm
-            max_w = 55 * mm
-            ext = os.path.splitext(logo_path)[1].lower()
+    if logo_path:
+        if not os.path.exists(logo_path):
+            logger.warning("Logo file not found: %s", logo_path)
+        else:
+            try:
+                max_h = 30 * mm
+                max_w = 55 * mm
+                ext = os.path.splitext(logo_path)[1].lower()
 
-            if ext == '.svg':
-                # SVG: convert via svglib
-                from svglib.svglib import svg2rlg
-                from reportlab.graphics import renderPDF
-                drawing = svg2rlg(logo_path)
-                if drawing:
-                    iw, ih = drawing.width, drawing.height
+                if ext == '.svg':
+                    # SVG: convert via svglib
+                    from svglib.svglib import svg2rlg
+                    from reportlab.graphics import renderPDF
+                    drawing = svg2rlg(logo_path)
+                    if drawing:
+                        iw, ih = drawing.width, drawing.height
+                        ratio = min(max_w / iw, max_h / ih, 1)
+                        draw_w, draw_h = iw * ratio, ih * ratio
+                        drawing.width = draw_w
+                        drawing.height = draw_h
+                        drawing.scale(ratio, ratio)
+                        x = PAGE_W - MARGIN_RIGHT - draw_w
+                        y = PAGE_H - MARGIN_TOP - draw_h
+                        renderPDF.draw(drawing, canvas, x, y)
+                    else:
+                        logger.warning("SVG logo could not be parsed: %s", logo_path)
+                else:
+                    # Raster image (PNG, JPEG, etc.)
+                    img = ImageReader(logo_path)
+                    iw, ih = img.getSize()
                     ratio = min(max_w / iw, max_h / ih, 1)
                     draw_w, draw_h = iw * ratio, ih * ratio
-                    drawing.width = draw_w
-                    drawing.height = draw_h
-                    drawing.scale(ratio, ratio)
                     x = PAGE_W - MARGIN_RIGHT - draw_w
                     y = PAGE_H - MARGIN_TOP - draw_h
-                    renderPDF.draw(drawing, canvas, x, y)
-            else:
-                # Raster image (PNG, JPEG, etc.)
-                img = ImageReader(logo_path)
-                iw, ih = img.getSize()
-                ratio = min(max_w / iw, max_h / ih, 1)
-                draw_w, draw_h = iw * ratio, ih * ratio
-                x = PAGE_W - MARGIN_RIGHT - draw_w
-                y = PAGE_H - MARGIN_TOP - draw_h
-                canvas.drawImage(img, x, y, draw_w, draw_h, preserveAspectRatio=True, mask='auto')
-        except Exception:
-            pass  # silently skip broken logo
+                    canvas.drawImage(img, x, y, draw_w, draw_h, preserveAspectRatio=True, mask='auto')
+            except Exception:
+                logger.exception("Failed to render logo '%s' in PDF", logo_path)
 
     # ── Sender line (small, above recipient) ──
     sender_str = issuer_name

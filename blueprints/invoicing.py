@@ -924,7 +924,7 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
 
         standard = get_standard('zugferd')
         xml_bytes = standard.generate_xml(einvoice_data)
-        pdf_bytes = embed_xml_in_pdf(pdf_bytes, xml_bytes, standard)
+        pdf_bytes = embed_xml_in_pdf(pdf_bytes, xml_bytes)
     except Exception:
         pass  # ZUGFeRD embedding is best-effort
 
