@@ -899,9 +899,21 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
             line_items.append(li)
 
         gross_total = invoice.total
-        net_total = round(gross_total / tax_factor, 2)
-        tax_total = round(gross_total - net_total, 2)
-        lines_net_total = sum(li.line_total_net for li in line_items)
+
+        # EN 16931 requires mathematical consistency:
+        # BR-CO-13: total_net = Σ line_total_net - allowances + charges
+        # BR-S-08: TaxBasisTotalAmount = Σ line_total_net (for that tax category)
+        # So we derive total_net from the sum of individually rounded line amounts
+        # and compute tax as the remainder, ensuring all values are consistent.
+        lines_net_total = round(sum(li.line_total_net for li in line_items), 2)
+
+        # Discount at document level (netto)
+        discount_net = 0.0
+        if invoice.discount_percent and invoice.discount_percent > 0:
+            discount_net = round(lines_net_total * invoice.discount_percent / 100, 2)
+
+        total_net = round(lines_net_total - discount_net, 2)
+        tax_total = round(gross_total - total_net, 2)
 
         buyer_name = ''
         if invoice.customer:
@@ -933,7 +945,8 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
             tax_mode=sd['tax_mode'],
             tax_amount=tax_total,
             line_total_net=lines_net_total,
-            total_net=net_total,
+            discount_amount_net=discount_net,
+            total_net=total_net,
             total_gross=gross_total,
             payment_terms_days=invoice.payment_terms_days or 14,
             payment_reference=invoice.invoice_number,
