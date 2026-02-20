@@ -575,6 +575,71 @@ Delete a transaction. Associated document files are also removed.
 
 ---
 
+### Transaction Documents
+
+Attach, download, or remove document files (receipts, invoices, etc.) from transactions. Allowed file types: **pdf, png, jpg, jpeg, gif, webp**. Max file size: **16 MB**.
+
+#### `POST /transactions/:id/document`
+
+Upload or replace a document attachment for a transaction. Uses `multipart/form-data` (not JSON).
+
+**Request:** `Content-Type: multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `document` | file | ✅ | The file to attach |
+
+**Response:** `201 Created`
+```json
+{
+  "transaction_id": 42,
+  "document_filename": "20260115_103000_rechnung.pdf"
+}
+```
+
+**Errors:**
+- `400` – No file provided or file type not allowed
+- `404` – Transaction not found
+
+**Example (cURL):**
+```bash
+curl -X POST https://your-host/api/v1/transactions/42/document \
+  -H "Authorization: Bearer your-api-key" \
+  -F "document=@/path/to/rechnung.pdf"
+```
+
+> **Note:** If the transaction already has a document, uploading a new one replaces the old file.
+
+---
+
+#### `GET /transactions/:id/document`
+
+Download the document attached to a transaction. Returns the raw file with the appropriate content type.
+
+**Response:** The file content (binary) with `Content-Type` matching the file type, or `404` if no document is attached.
+
+**Example (cURL):**
+```bash
+curl https://your-host/api/v1/transactions/42/document \
+  -H "Authorization: Bearer your-api-key" \
+  -o rechnung.pdf
+```
+
+---
+
+#### `DELETE /transactions/:id/document`
+
+Remove the document from a transaction. The file is deleted from disk.
+
+**Response:**
+```json
+{ "deleted": true, "transaction_id": 42 }
+```
+
+**Error (404):** Transaction not found, or no document attached.
+
+---
+
 ### Summary
 
 #### `GET /summary`
