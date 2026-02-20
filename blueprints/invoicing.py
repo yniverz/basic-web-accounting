@@ -828,10 +828,21 @@ def _generate_quote_pdf(quote: Quote, settings: SiteSettings):
     )
 
     # Archive old PDF if exists
-    if quote.document_filename:
-        _archive_document(quote.document_filename)
+    old_filename = quote.document_filename
+    archived_name = None
+    if old_filename:
+        archived_name = _archive_document(old_filename)
 
     quote.document_filename = _save_pdf(pdf_bytes, 'Angebot', quote.quote_number)
+
+    # Write explicit audit entry for PDF generation
+    from audit import log_action
+    log_action(
+        'PDF_GENERATE', 'Quote', quote.id,
+        old_values={'document_filename': old_filename} if old_filename else None,
+        new_values={'document_filename': quote.document_filename},
+        archived_files=[archived_name] if archived_name else None,
+    )
 
 
 def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
@@ -967,14 +978,25 @@ def _generate_invoice_pdf(invoice: Invoice, settings: SiteSettings):
         )
 
     # Archive old PDF if exists
-    if invoice.document_filename:
-        _archive_document(invoice.document_filename)
+    old_filename = invoice.document_filename
+    archived_name = None
+    if old_filename:
+        archived_name = _archive_document(old_filename)
 
     invoice.document_filename = _save_pdf(pdf_bytes, 'Rechnung', invoice.invoice_number)
 
+    # Write explicit audit entry for PDF generation
+    from audit import log_action
+    log_action(
+        'PDF_GENERATE', 'Invoice', invoice.id,
+        old_values={'document_filename': old_filename} if old_filename else None,
+        new_values={'document_filename': invoice.document_filename},
+        archived_files=[archived_name] if archived_name else None,
+    )
 
-def _archive_document(filename: str):
-    """Move a document to the archive folder."""
+
+def _archive_document(filename: str) -> str | None:
+    """Move a document to the archive folder. Returns the archived filename."""
     from audit import archive_file
     upload_dir = current_app.config['UPLOAD_FOLDER']
-    archive_file(upload_dir, filename)
+    return archive_file(upload_dir, filename)

@@ -331,6 +331,20 @@ def verify_integrity(db):
 
 # ── Initialisation ─────────────────────────────────────────────────────────
 
+def log_action(action: str, entity_type: str, entity_id,
+               old_values=None, new_values=None, archived_files=None):
+    """Public helper: write an explicit audit entry (e.g. for PDF generation).
+
+    Unlike the automatic SQLAlchemy listener, this lets callers record
+    custom events that are not simple CRUD on a model row.
+    """
+    from models import db as _db
+    _write_audit(
+        _db.session, action, entity_type, entity_id,
+        old_values, new_values, archived_files,
+    )
+
+
 def init_audit(app, db):
     """
     Register the SQLAlchemy event listener.  Call this once after db.init_app().
@@ -338,12 +352,14 @@ def init_audit(app, db):
     from models import (
         User, SiteSettings, Account, Category, Transaction,
         Asset, DepreciationCategory, Document, AuditLog,
+        Customer, Quote, QuoteItem, Invoice, InvoiceItem,
     )
 
     global AUDITED_MODELS
     AUDITED_MODELS = {
         User, SiteSettings, Account, Category, Transaction,
         Asset, DepreciationCategory, Document,
+        Customer, Quote, QuoteItem, Invoice, InvoiceItem,
     }
 
     event.listen(db.session.__class__, 'before_flush', _on_before_flush)

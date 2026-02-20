@@ -1364,6 +1364,9 @@ def execute_tool(name, args):
         if 'password' in args:
             from werkzeug.security import generate_password_hash
             u.password_hash = generate_password_hash(args['password'])
+            from audit import log_action
+            log_action('PASSWORD_CHANGE', 'User', u.id,
+                       new_values={'changed_by': f'ai_chat (user {current_user.username})'})
         db.session.commit()
         return {'status': 'updated', 'user': {'id': u.id, 'username': u.username}}
 

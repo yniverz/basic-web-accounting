@@ -44,6 +44,13 @@
                 <option value="CREATE" {{ 'selected' if filters.action == 'CREATE' }}>Erstellt</option>
                 <option value="UPDATE" {{ 'selected' if filters.action == 'UPDATE' }}>Geändert</option>
                 <option value="DELETE" {{ 'selected' if filters.action == 'DELETE' }}>Gelöscht</option>
+                <option value="PDF_GENERATE" {{ 'selected' if filters.action == 'PDF_GENERATE' }}>PDF generiert</option>
+                <option value="LOGIN" {{ 'selected' if filters.action == 'LOGIN' }}>Login</option>
+                <option value="LOGIN_FAILED" {{ 'selected' if filters.action == 'LOGIN_FAILED' }}>Login fehlgeschlagen</option>
+                <option value="LOGOUT" {{ 'selected' if filters.action == 'LOGOUT' }}>Logout</option>
+                <option value="PASSWORD_CHANGE" {{ 'selected' if filters.action == 'PASSWORD_CHANGE' }}>Passwort geändert</option>
+                <option value="FILE_UPLOAD" {{ 'selected' if filters.action == 'FILE_UPLOAD' }}>Datei hochgeladen</option>
+                <option value="FILE_REMOVE" {{ 'selected' if filters.action == 'FILE_REMOVE' }}>Datei entfernt</option>
             </select>
         </div>
         <div class="form-group">
@@ -153,6 +160,22 @@
                         <span class="badge" style="background: var(--color-accent-light); color: var(--color-accent);">Geändert</span>
                         {% elif entry.action == 'DELETE' %}
                         <span class="badge badge-expense">Gelöscht</span>
+                        {% elif entry.action == 'PDF_GENERATE' %}
+                        <span class="badge badge-info">PDF generiert</span>
+                        {% elif entry.action == 'LOGIN' %}
+                        <span class="badge badge-income">Login</span>
+                        {% elif entry.action == 'LOGIN_FAILED' %}
+                        <span class="badge badge-expense">Login fehlgeschlagen</span>
+                        {% elif entry.action == 'LOGOUT' %}
+                        <span class="badge badge-muted">Logout</span>
+                        {% elif entry.action == 'PASSWORD_CHANGE' %}
+                        <span class="badge" style="background: var(--color-accent-light); color: var(--color-accent);">Passwort geändert</span>
+                        {% elif entry.action == 'FILE_UPLOAD' %}
+                        <span class="badge badge-info">Datei hochgeladen</span>
+                        {% elif entry.action == 'FILE_REMOVE' %}
+                        <span class="badge badge-muted">Datei entfernt</span>
+                        {% else %}
+                        <span class="badge">{{ entry.action }}</span>
                         {% endif %}
                     </td>
                     <td>{{ entry.entity_type }}</td>
@@ -169,7 +192,7 @@
                 <tr class="audit-detail-row" id="detail-{{ entry.id }}" style="display: none;">
                     <td colspan="9">
                         <div class="audit-detail-content">
-                            {% if entry.action == 'UPDATE' %}
+                            {% if entry.action == 'UPDATE' or entry.action == 'PDF_GENERATE' %}
                             <div class="audit-diff">
                                 <div class="audit-diff-side audit-diff-old">
                                     <h4>Vorher</h4>

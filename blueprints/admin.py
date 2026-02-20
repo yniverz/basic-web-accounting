@@ -1819,22 +1819,32 @@ def settings():
         settings.tax_rate_reduced = float(request.form.get('tax_rate_reduced', 7.0))
 
         # Favicon upload
+        from audit import log_action
         favicon_file = request.files.get('favicon')
         if favicon_file and favicon_file.filename:
             fname = secure_filename(favicon_file.filename)
             fname = 'favicon_' + fname
             upload_dir = current_app.config['UPLOAD_FOLDER']
-            # Archive old favicon
-            if settings.favicon_filename:
-                archive_file(upload_dir, settings.favicon_filename)
+            old_favicon = settings.favicon_filename
+            archived_name = None
+            if old_favicon:
+                archived_name = archive_file(upload_dir, old_favicon)
             favicon_file.save(os.path.join(upload_dir, fname))
             settings.favicon_filename = fname
+            log_action('FILE_UPLOAD', 'SiteSettings', settings.id,
+                       old_values={'favicon_filename': old_favicon} if old_favicon else None,
+                       new_values={'favicon_filename': fname},
+                       archived_files=[archived_name] if archived_name else None)
 
         # Remove favicon
         if request.form.get('remove_favicon'):
             if settings.favicon_filename:
-                archive_file(current_app.config['UPLOAD_FOLDER'], settings.favicon_filename)
+                old_favicon = settings.favicon_filename
+                archived_name = archive_file(current_app.config['UPLOAD_FOLDER'], old_favicon)
                 settings.favicon_filename = None
+                log_action('FILE_REMOVE', 'SiteSettings', settings.id,
+                           old_values={'favicon_filename': old_favicon},
+                           archived_files=[archived_name] if archived_name else None)
 
         # Logo upload (for PDFs)
         logo_file = request.files.get('logo')
@@ -1842,16 +1852,26 @@ def settings():
             fname = secure_filename(logo_file.filename)
             fname = 'logo_' + fname
             upload_dir = current_app.config['UPLOAD_FOLDER']
-            if settings.logo_filename:
-                archive_file(upload_dir, settings.logo_filename)
+            old_logo = settings.logo_filename
+            archived_name = None
+            if old_logo:
+                archived_name = archive_file(upload_dir, old_logo)
             logo_file.save(os.path.join(upload_dir, fname))
             settings.logo_filename = fname
+            log_action('FILE_UPLOAD', 'SiteSettings', settings.id,
+                       old_values={'logo_filename': old_logo} if old_logo else None,
+                       new_values={'logo_filename': fname},
+                       archived_files=[archived_name] if archived_name else None)
 
         # Remove logo
         if request.form.get('remove_logo'):
             if settings.logo_filename:
-                archive_file(current_app.config['UPLOAD_FOLDER'], settings.logo_filename)
+                old_logo = settings.logo_filename
+                archived_name = archive_file(current_app.config['UPLOAD_FOLDER'], old_logo)
                 settings.logo_filename = None
+                log_action('FILE_REMOVE', 'SiteSettings', settings.id,
+                           old_values={'logo_filename': old_logo},
+                           archived_files=[archived_name] if archived_name else None)
 
         # Invoicing defaults
         settings.default_agb_text = request.form.get('default_agb_text', '').strip() or None
@@ -1950,6 +1970,9 @@ def user_edit(id):
                 flash('Passwort muss mindestens 6 Zeichen lang sein.', 'error')
                 return render_template('user_form.html', user=user)
             user.password_hash = generate_password_hash(password)
+            from audit import log_action
+            log_action('PASSWORD_CHANGE', 'User', user.id,
+                       new_values={'changed_by': current_user.username})
 
         db.session.commit()
         flash('Benutzer wurde aktualisiert.', 'success')
