@@ -9,7 +9,7 @@ Dates are ISO 8601 (YYYY-MM-DD).
 """
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
@@ -19,7 +19,10 @@ from helpers import (
     calculate_tax, get_tax_rate_for_treatment, parse_date,
     TAX_TREATMENT_LABELS,
 )
-from models import Account, Category, Customer, Document, SiteSettings, Transaction, db
+from models import (
+    Account, Category, Customer, Document, SiteSettings, Transaction,
+    Quote, QuoteItem, Invoice, InvoiceItem, Asset, db,
+)
 from audit import archive_file
 
 api_bp = Blueprint('api', __name__)
@@ -1070,3 +1073,1071 @@ def summary():
         'monthly': monthly,
         'accounts': [_account_to_dict(a) for a in accounts],
     })
+
+
+# ---------------------------------------------------------------------------
+# Helpers: invoicing (quotes & invoices)
+# ---------------------------------------------------------------------------
+
+def _quote_item_to_dict(item):
+    """Serialize a QuoteItem to a dict."""
+    return {
+        'id': item.id,
+        'position': item.position,
+        'description': item.description,
+        'quantity': item.quantity,
+        'unit': item.unit,
+        'unit_price': item.unit_price,
+        'total': item.total,
+    }
+
+
+def _quote_to_dict(q, include_items=True):
+    """Serialize a Quote to a dict."""
+    d = {
+        'id': q.id,
+        'quote_number': q.quote_number,
+        'customer_id': q.customer_id,
+        'customer_name': q.customer.display_name if q.customer else None,
+        'date': q.date.isoformat() if q.date else None,
+        'valid_until': q.valid_until.isoformat() if q.valid_until else None,
+        'status': q.status,
+        'tax_treatment': q.tax_treatment,
+        'tax_rate': q.tax_rate,
+        'discount_percent': q.discount_percent,
+        'subtotal': q.subtotal,
+        'discount_amount': q.discount_amount,
+        'total': q.total,
+        'notes': q.notes,
+        'agb_text': q.agb_text,
+        'payment_terms_days': q.payment_terms_days,
+        'linked_asset_id': q.linked_asset_id,
+        'has_pdf': bool(q.document_filename),
+        'created_at': q.created_at.isoformat() if q.created_at else None,
+        'updated_at': q.updated_at.isoformat() if q.updated_at else None,
+    }
+    if include_items:
+        d['items'] = [_quote_item_to_dict(i) for i in q.items]
+    return d
+
+
+def _invoice_item_to_dict(item):
+    """Serialize an InvoiceItem to a dict."""
+    return {
+        'id': item.id,
+        'position': item.position,
+        'description': item.description,
+        'quantity': item.quantity,
+        'unit': item.unit,
+        'unit_price': item.unit_price,
+        'total': item.total,
+    }
+
+
+def _invoice_to_dict(inv, include_items=True):
+    """Serialize an Invoice to a dict."""
+    d = {
+        'id': inv.id,
+        'invoice_number': inv.invoice_number,
+        'quote_id': inv.quote_id,
+        'customer_id': inv.customer_id,
+        'customer_name': inv.customer.display_name if inv.customer else None,
+        'date': inv.date.isoformat() if inv.date else None,
+        'due_date': inv.due_date.isoformat() if inv.due_date else None,
+        'status': inv.status,
+        'tax_treatment': inv.tax_treatment,
+        'tax_rate': inv.tax_rate,
+        'discount_percent': inv.discount_percent,
+        'subtotal': inv.subtotal,
+        'discount_amount': inv.discount_amount,
+        'total': inv.total,
+        'notes': inv.notes,
+        'payment_terms_days': inv.payment_terms_days,
+        'linked_asset_id': inv.linked_asset_id,
+        'linked_transaction_id': inv.linked_transaction_id,
+        'has_pdf': bool(inv.document_filename),
+        'created_at': inv.created_at.isoformat() if inv.created_at else None,
+        'updated_at': inv.updated_at.isoformat() if inv.updated_at else None,
+    }
+    if include_items:
+        d['items'] = [_invoice_item_to_dict(i) for i in inv.items]
+    return d
+
+
+def _save_quote_items(quote, items_data):
+    """Create QuoteItem records from a list of item dicts."""
+    for i, item in enumerate(items_data):
+        desc = item.get('description', '').strip()
+        if not desc:
+            continue
+        qi = QuoteItem(
+            quote_id=quote.id,
+            position=item.get('position', i + 1),
+            description=desc,
+            quantity=float(item.get('quantity', 1)),
+            unit=item.get('unit', 'Stk.').strip() or 'Stk.',
+            unit_price=float(item.get('unit_price', 0)),
+        )
+        db.session.add(qi)
+
+
+def _save_invoice_items_api(invoice, items_data):
+    """Create InvoiceItem records from a list of item dicts."""
+    for i, item in enumerate(items_data):
+        desc = item.get('description', '').strip()
+        if not desc:
+            continue
+        ii = InvoiceItem(
+            invoice_id=invoice.id,
+            position=item.get('position', i + 1),
+            description=desc,
+            quantity=float(item.get('quantity', 1)),
+            unit=item.get('unit', 'Stk.').strip() or 'Stk.',
+            unit_price=float(item.get('unit_price', 0)),
+        )
+        db.session.add(ii)
+
+
+def _next_number_api(prefix, model_class, number_field, year=None):
+    """Generate the next sequential document number, e.g. A-2026-0001."""
+    if year is None:
+        year = date.today().year
+    pattern = f'{prefix}-{year}-%'
+    col = getattr(model_class, number_field)
+    last = (model_class.query
+            .filter(col.like(pattern))
+            .order_by(col.desc())
+            .first())
+    if last:
+        last_num = getattr(last, number_field)
+        try:
+            seq = int(last_num.rsplit('-', 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    else:
+        seq = 1
+    return f'{prefix}-{year}-{seq:04d}'
+
+
+def _generate_quote_pdf_api(quote, settings):
+    """Generate the PDF for a quote and store it."""
+    from blueprints.invoicing import _generate_quote_pdf
+    _generate_quote_pdf(quote, settings)
+
+
+def _generate_invoice_pdf_api(invoice, settings):
+    """Generate the PDF for an invoice and store it."""
+    from blueprints.invoicing import _generate_invoice_pdf
+    _generate_invoice_pdf(invoice, settings)
+
+
+def _archive_document_api(filename):
+    """Move a document file to the archive folder."""
+    upload_dir = current_app.config['UPLOAD_FOLDER']
+    archive_file(upload_dir, filename)
+
+
+# ---------------------------------------------------------------------------
+# Quotes (Angebote)
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/quotes', methods=['GET'])
+@require_api_key
+def list_quotes():
+    """
+    List quotes with optional filters.
+    Query params:
+      status   – draft, sent, accepted, rejected, invoiced
+      year     – filter by year
+      customer_id – filter by customer
+      limit    – max results (default 100, max 1000)
+      offset   – pagination offset (default 0)
+    """
+    q = Quote.query
+
+    status = request.args.get('status', '').strip()
+    if status:
+        q = q.filter_by(status=status)
+
+    year = request.args.get('year', type=int)
+    if year:
+        q = q.filter(db.extract('year', Quote.date) == year)
+
+    customer_id = request.args.get('customer_id', type=int)
+    if customer_id:
+        q = q.filter_by(customer_id=customer_id)
+
+    q = q.order_by(Quote.date.desc(), Quote.id.desc())
+
+    total = q.count()
+    limit = min(request.args.get('limit', 100, type=int), 1000)
+    offset = request.args.get('offset', 0, type=int)
+    quotes = q.limit(limit).offset(offset).all()
+
+    return jsonify({
+        'quotes': [_quote_to_dict(qu, include_items=False) for qu in quotes],
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+    })
+
+
+@api_bp.route('/quotes', methods=['POST'])
+@require_api_key
+def create_quote():
+    """
+    Create a new quote.
+    Body: {
+        customer_id:        int       (optional)
+        date:               "YYYY-MM-DD" (required)
+        valid_until:        "YYYY-MM-DD" (optional)
+        tax_treatment:      string    (optional, default "none")
+        custom_tax_rate:    number    (optional, only if tax_treatment="custom")
+        discount_percent:   number    (optional, default 0)
+        notes:              string    (optional)
+        agb_text:           string    (optional)
+        payment_terms_days: int       (optional, default 14)
+        linked_asset_id:    int       (optional)
+        items: [
+            {
+                description: string  (required)
+                quantity:    number   (optional, default 1)
+                unit:        string   (optional, default "Stk.")
+                unit_price:  number   (required, gross price per unit)
+                position:    int      (optional, auto-assigned)
+            }
+        ]
+    }
+    """
+    data = request.get_json(force=True)
+    settings = SiteSettings.get_settings()
+
+    # Validate required fields
+    errors = []
+    if not data.get('date'):
+        errors.append('date is required (YYYY-MM-DD)')
+    items = data.get('items', [])
+    if not items:
+        errors.append('items array is required with at least one item')
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    try:
+        q_date = parse_date(data['date'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    valid_until = None
+    if data.get('valid_until'):
+        try:
+            valid_until = parse_date(data['valid_until'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid valid_until date format. Use YYYY-MM-DD.'}), 400
+
+    # Validate customer exists
+    customer_id = data.get('customer_id')
+    if customer_id is not None:
+        cust = Customer.query.get(customer_id)
+        if not cust:
+            return jsonify({'error': f'Customer {customer_id} not found'}), 404
+
+    # Validate linked asset exists
+    linked_asset_id = data.get('linked_asset_id')
+    if linked_asset_id is not None:
+        asset = Asset.query.get(linked_asset_id)
+        if not asset:
+            return jsonify({'error': f'Asset {linked_asset_id} not found'}), 404
+
+    # Tax
+    tax_treatment = data.get('tax_treatment', 'none')
+    if tax_treatment not in TAX_TREATMENT_LABELS:
+        return jsonify({
+            'error': f'Invalid tax_treatment. Valid values: {", ".join(TAX_TREATMENT_LABELS.keys())}'
+        }), 400
+
+    if settings.tax_mode == 'kleinunternehmer':
+        tax_treatment = 'none'
+
+    custom_rate = float(data.get('custom_tax_rate', 0) or 0)
+    tax_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+    # Validate items
+    for i, item in enumerate(items):
+        if not item.get('description', '').strip():
+            errors.append(f'items[{i}].description is required')
+        if item.get('unit_price') is None:
+            errors.append(f'items[{i}].unit_price is required')
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    # Generate number
+    prefix = settings.quote_number_prefix or 'A'
+    quote_number = _next_number_api(prefix, Quote, 'quote_number')
+
+    payment_terms = int(data.get('payment_terms_days', 14) or 14)
+
+    quote = Quote(
+        quote_number=quote_number,
+        customer_id=customer_id,
+        date=q_date,
+        valid_until=valid_until,
+        status='draft',
+        tax_treatment=tax_treatment,
+        tax_rate=tax_rate,
+        discount_percent=float(data.get('discount_percent', 0) or 0),
+        notes=data.get('notes', '').strip() or None,
+        agb_text=data.get('agb_text', '').strip() or None,
+        payment_terms_days=payment_terms,
+        linked_asset_id=linked_asset_id,
+    )
+    db.session.add(quote)
+    db.session.flush()
+
+    _save_quote_items(quote, items)
+    db.session.commit()
+
+    return jsonify({'quote': _quote_to_dict(quote)}), 201
+
+
+@api_bp.route('/quotes/<int:quote_id>', methods=['GET'])
+@require_api_key
+def get_quote(quote_id):
+    """Get a single quote by ID with items."""
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+    return jsonify({'quote': _quote_to_dict(q)})
+
+
+@api_bp.route('/quotes/<int:quote_id>', methods=['PUT', 'PATCH'])
+@require_api_key
+def update_quote(quote_id):
+    """
+    Update a quote. Only provided fields are changed.
+    If 'items' is provided, all existing items are replaced.
+    Body: {
+        customer_id?, date?, valid_until?, tax_treatment?, custom_tax_rate?,
+        discount_percent?, notes?, agb_text?, payment_terms_days?,
+        items?: [ { description, quantity?, unit?, unit_price, position? } ]
+    }
+    """
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    if q.status == 'invoiced':
+        return jsonify({'error': 'Cannot edit a quote that has been invoiced.'}), 409
+
+    data = request.get_json(force=True)
+    settings = SiteSettings.get_settings()
+
+    if 'date' in data:
+        try:
+            q.date = parse_date(data['date'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    if 'valid_until' in data:
+        if data['valid_until']:
+            try:
+                q.valid_until = parse_date(data['valid_until'])
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid valid_until date format. Use YYYY-MM-DD.'}), 400
+        else:
+            q.valid_until = None
+
+    if 'customer_id' in data:
+        if data['customer_id'] is not None:
+            cust = Customer.query.get(data['customer_id'])
+            if not cust:
+                return jsonify({'error': f"Customer {data['customer_id']} not found"}), 404
+        q.customer_id = data['customer_id']
+
+    if 'linked_asset_id' in data:
+        if data['linked_asset_id'] is not None:
+            asset = Asset.query.get(data['linked_asset_id'])
+            if not asset:
+                return jsonify({'error': f"Asset {data['linked_asset_id']} not found"}), 404
+        q.linked_asset_id = data['linked_asset_id']
+
+    if 'tax_treatment' in data:
+        tax_treatment = data['tax_treatment']
+        if tax_treatment not in TAX_TREATMENT_LABELS:
+            return jsonify({
+                'error': f'Invalid tax_treatment. Valid values: {", ".join(TAX_TREATMENT_LABELS.keys())}'
+            }), 400
+        if settings.tax_mode == 'kleinunternehmer':
+            tax_treatment = 'none'
+        q.tax_treatment = tax_treatment
+        custom_rate = float(data.get('custom_tax_rate', 0) or 0)
+        q.tax_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+    if 'discount_percent' in data:
+        q.discount_percent = float(data['discount_percent'] or 0)
+
+    if 'notes' in data:
+        q.notes = data['notes'].strip() or None if data['notes'] else None
+
+    if 'agb_text' in data:
+        q.agb_text = data['agb_text'].strip() or None if data['agb_text'] else None
+
+    if 'payment_terms_days' in data:
+        q.payment_terms_days = int(data['payment_terms_days'] or 14)
+
+    # Replace items if provided
+    if 'items' in data:
+        items = data['items']
+        if not items:
+            return jsonify({'error': 'items array must contain at least one item'}), 400
+        errors = []
+        for i, item in enumerate(items):
+            if not item.get('description', '').strip():
+                errors.append(f'items[{i}].description is required')
+            if item.get('unit_price') is None:
+                errors.append(f'items[{i}].unit_price is required')
+        if errors:
+            return jsonify({'errors': errors}), 400
+
+        QuoteItem.query.filter_by(quote_id=q.id).delete()
+        _save_quote_items(q, items)
+
+    # Regenerate PDF if it existed
+    if q.document_filename:
+        _generate_quote_pdf_api(q, settings)
+
+    db.session.commit()
+    return jsonify({'quote': _quote_to_dict(q)})
+
+
+@api_bp.route('/quotes/<int:quote_id>', methods=['DELETE'])
+@require_api_key
+def delete_quote(quote_id):
+    """Delete a quote. Fails if invoices reference it."""
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    if q.invoices.count() > 0:
+        return jsonify({
+            'error': f'Cannot delete quote with {q.invoices.count()} linked invoice(s). Delete them first.'
+        }), 409
+
+    if q.document_filename:
+        _archive_document_api(q.document_filename)
+
+    db.session.delete(q)
+    db.session.commit()
+    return jsonify({'deleted': True, 'id': quote_id})
+
+
+@api_bp.route('/quotes/<int:quote_id>/status', methods=['POST', 'PUT'])
+@require_api_key
+def set_quote_status(quote_id):
+    """
+    Change quote status.
+    Body: { "status": "draft" | "sent" | "accepted" | "rejected" }
+    """
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    data = request.get_json(force=True)
+    new_status = data.get('status', '').strip()
+    allowed = ['draft', 'sent', 'accepted', 'rejected']
+    if new_status not in allowed:
+        return jsonify({
+            'error': f'Invalid status. Allowed: {", ".join(allowed)}'
+        }), 400
+
+    q.status = new_status
+    db.session.commit()
+    return jsonify({'quote': _quote_to_dict(q, include_items=False)})
+
+
+@api_bp.route('/quotes/<int:quote_id>/generate-pdf', methods=['POST'])
+@require_api_key
+def generate_quote_pdf(quote_id):
+    """Generate or regenerate the quote PDF."""
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    settings = SiteSettings.get_settings()
+    _generate_quote_pdf_api(q, settings)
+    db.session.commit()
+
+    return jsonify({
+        'quote_id': q.id,
+        'quote_number': q.quote_number,
+        'has_pdf': True,
+        'message': 'PDF generated successfully.',
+    })
+
+
+@api_bp.route('/quotes/<int:quote_id>/pdf', methods=['GET'])
+@require_api_key
+def download_quote_pdf(quote_id):
+    """Download the quote PDF."""
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    if not q.document_filename:
+        return jsonify({'error': 'No PDF available. Generate it first via POST /quotes/:id/generate-pdf.'}), 404
+
+    upload_folder = current_app.config['UPLOAD_FOLDER']
+    fp = os.path.join(upload_folder, q.document_filename)
+    if not os.path.exists(fp):
+        return jsonify({'error': 'PDF file not found on disk.'}), 404
+
+    return send_from_directory(upload_folder, q.document_filename,
+                               as_attachment=False,
+                               download_name=f'Angebot_{q.quote_number}.pdf')
+
+
+@api_bp.route('/quotes/<int:quote_id>/create-invoice', methods=['POST'])
+@require_api_key
+def create_invoice_from_quote(quote_id):
+    """
+    Create an invoice from a quote.
+    Copies all items and settings. Marks quote as 'invoiced'. Generates invoice PDF.
+    Optional body: { "date": "YYYY-MM-DD" }   (defaults to today)
+    """
+    q = Quote.query.get(quote_id)
+    if not q:
+        return jsonify({'error': f'Quote {quote_id} not found'}), 404
+
+    if q.status == 'invoiced':
+        return jsonify({'error': 'Quote has already been invoiced.'}), 409
+
+    data = request.get_json(silent=True) or {}
+    settings = SiteSettings.get_settings()
+
+    inv_date = date.today()
+    if data.get('date'):
+        try:
+            inv_date = parse_date(data['date'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    prefix = settings.invoice_number_prefix or 'R'
+    invoice_number = _next_number_api(prefix, Invoice, 'invoice_number')
+
+    invoice = Invoice(
+        invoice_number=invoice_number,
+        quote_id=q.id,
+        customer_id=q.customer_id,
+        date=inv_date,
+        due_date=inv_date + timedelta(days=q.payment_terms_days or 14),
+        status='draft',
+        tax_treatment=q.tax_treatment,
+        tax_rate=q.tax_rate,
+        discount_percent=q.discount_percent,
+        notes=q.notes,
+        payment_terms_days=q.payment_terms_days,
+        linked_asset_id=q.linked_asset_id,
+    )
+    db.session.add(invoice)
+    db.session.flush()
+
+    for qi in q.items:
+        ii = InvoiceItem(
+            invoice_id=invoice.id,
+            position=qi.position,
+            description=qi.description,
+            quantity=qi.quantity,
+            unit=qi.unit,
+            unit_price=qi.unit_price,
+        )
+        db.session.add(ii)
+
+    q.status = 'invoiced'
+
+    _generate_invoice_pdf_api(invoice, settings)
+    db.session.commit()
+
+    return jsonify({'invoice': _invoice_to_dict(invoice)}), 201
+
+
+# ---------------------------------------------------------------------------
+# Invoices (Rechnungen)
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/invoices', methods=['GET'])
+@require_api_key
+def list_invoices():
+    """
+    List invoices with optional filters.
+    Query params:
+      status      – draft, sent, paid, cancelled
+      year        – filter by year
+      customer_id – filter by customer
+      limit       – max results (default 100, max 1000)
+      offset      – pagination offset (default 0)
+    """
+    q = Invoice.query
+
+    status = request.args.get('status', '').strip()
+    if status:
+        q = q.filter_by(status=status)
+
+    year = request.args.get('year', type=int)
+    if year:
+        q = q.filter(db.extract('year', Invoice.date) == year)
+
+    customer_id = request.args.get('customer_id', type=int)
+    if customer_id:
+        q = q.filter_by(customer_id=customer_id)
+
+    q = q.order_by(Invoice.date.desc(), Invoice.id.desc())
+
+    total = q.count()
+    limit = min(request.args.get('limit', 100, type=int), 1000)
+    offset = request.args.get('offset', 0, type=int)
+    invoices = q.limit(limit).offset(offset).all()
+
+    # Aggregate totals
+    total_amount = sum(inv.total for inv in invoices)
+    paid_amount = sum(inv.total for inv in invoices if inv.status == 'paid')
+    open_amount = sum(inv.total for inv in invoices if inv.status in ('draft', 'sent'))
+
+    return jsonify({
+        'invoices': [_invoice_to_dict(inv, include_items=False) for inv in invoices],
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+        'total_amount': round(total_amount, 2),
+        'paid_amount': round(paid_amount, 2),
+        'open_amount': round(open_amount, 2),
+    })
+
+
+@api_bp.route('/invoices', methods=['POST'])
+@require_api_key
+def create_invoice():
+    """
+    Create a new invoice (without quote).
+    Body: {
+        customer_id:        int       (required)
+        date:               "YYYY-MM-DD" (required)
+        tax_treatment:      string    (optional, default "none")
+        custom_tax_rate:    number    (optional, only if tax_treatment="custom")
+        discount_percent:   number    (optional, default 0)
+        notes:              string    (optional)
+        payment_terms_days: int       (optional, default 14)
+        linked_asset_id:    int       (optional)
+        items: [
+            {
+                description: string  (required)
+                quantity:    number   (optional, default 1)
+                unit:        string   (optional, default "Stk.")
+                unit_price:  number   (required, gross price per unit)
+                position:    int      (optional, auto-assigned)
+            }
+        ]
+    }
+    """
+    data = request.get_json(force=True)
+    settings = SiteSettings.get_settings()
+
+    errors = []
+    if not data.get('date'):
+        errors.append('date is required (YYYY-MM-DD)')
+    if not data.get('customer_id'):
+        errors.append('customer_id is required')
+    items = data.get('items', [])
+    if not items:
+        errors.append('items array is required with at least one item')
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    try:
+        inv_date = parse_date(data['date'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    # Validate customer
+    customer_id = int(data['customer_id'])
+    cust = Customer.query.get(customer_id)
+    if not cust:
+        return jsonify({'error': f'Customer {customer_id} not found'}), 404
+
+    # Validate linked asset
+    linked_asset_id = data.get('linked_asset_id')
+    if linked_asset_id is not None:
+        asset = Asset.query.get(linked_asset_id)
+        if not asset:
+            return jsonify({'error': f'Asset {linked_asset_id} not found'}), 404
+
+    # Tax
+    tax_treatment = data.get('tax_treatment', 'none')
+    if tax_treatment not in TAX_TREATMENT_LABELS:
+        return jsonify({
+            'error': f'Invalid tax_treatment. Valid values: {", ".join(TAX_TREATMENT_LABELS.keys())}'
+        }), 400
+
+    if settings.tax_mode == 'kleinunternehmer':
+        tax_treatment = 'none'
+
+    custom_rate = float(data.get('custom_tax_rate', 0) or 0)
+    tax_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+    # Validate items
+    for i, item in enumerate(items):
+        if not item.get('description', '').strip():
+            errors.append(f'items[{i}].description is required')
+        if item.get('unit_price') is None:
+            errors.append(f'items[{i}].unit_price is required')
+    if errors:
+        return jsonify({'errors': errors}), 400
+
+    prefix = settings.invoice_number_prefix or 'R'
+    invoice_number = _next_number_api(prefix, Invoice, 'invoice_number')
+
+    payment_terms = int(data.get('payment_terms_days', 14) or 14)
+
+    invoice = Invoice(
+        invoice_number=invoice_number,
+        customer_id=customer_id,
+        date=inv_date,
+        due_date=inv_date + timedelta(days=payment_terms),
+        status='draft',
+        tax_treatment=tax_treatment,
+        tax_rate=tax_rate,
+        discount_percent=float(data.get('discount_percent', 0) or 0),
+        notes=data.get('notes', '').strip() or None,
+        payment_terms_days=payment_terms,
+        linked_asset_id=linked_asset_id,
+    )
+    db.session.add(invoice)
+    db.session.flush()
+
+    _save_invoice_items_api(invoice, items)
+    db.session.commit()
+
+    return jsonify({'invoice': _invoice_to_dict(invoice)}), 201
+
+
+@api_bp.route('/invoices/<int:invoice_id>', methods=['GET'])
+@require_api_key
+def get_invoice(invoice_id):
+    """Get a single invoice by ID with items."""
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+    return jsonify({'invoice': _invoice_to_dict(inv)})
+
+
+@api_bp.route('/invoices/<int:invoice_id>', methods=['PUT', 'PATCH'])
+@require_api_key
+def update_invoice(invoice_id):
+    """
+    Update an invoice. Only provided fields are changed.
+    If 'items' is provided, all existing items are replaced.
+    Paid invoices cannot be edited.
+    Body: {
+        customer_id?, date?, tax_treatment?, custom_tax_rate?,
+        discount_percent?, notes?, payment_terms_days?,
+        items?: [ { description, quantity?, unit?, unit_price, position? } ]
+    }
+    """
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    if inv.status == 'paid':
+        return jsonify({'error': 'Cannot edit a paid invoice. Unmark payment first.'}), 409
+
+    data = request.get_json(force=True)
+    settings = SiteSettings.get_settings()
+
+    if 'date' in data:
+        try:
+            inv.date = parse_date(data['date'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD.'}), 400
+
+    if 'customer_id' in data:
+        if data['customer_id'] is not None:
+            cust = Customer.query.get(data['customer_id'])
+            if not cust:
+                return jsonify({'error': f"Customer {data['customer_id']} not found"}), 404
+        inv.customer_id = data['customer_id']
+
+    if 'linked_asset_id' in data:
+        if data['linked_asset_id'] is not None:
+            asset = Asset.query.get(data['linked_asset_id'])
+            if not asset:
+                return jsonify({'error': f"Asset {data['linked_asset_id']} not found"}), 404
+        inv.linked_asset_id = data['linked_asset_id']
+
+    if 'tax_treatment' in data:
+        tax_treatment = data['tax_treatment']
+        if tax_treatment not in TAX_TREATMENT_LABELS:
+            return jsonify({
+                'error': f'Invalid tax_treatment. Valid values: {", ".join(TAX_TREATMENT_LABELS.keys())}'
+            }), 400
+        if settings.tax_mode == 'kleinunternehmer':
+            tax_treatment = 'none'
+        inv.tax_treatment = tax_treatment
+        custom_rate = float(data.get('custom_tax_rate', 0) or 0)
+        inv.tax_rate = get_tax_rate_for_treatment(tax_treatment, settings, custom_rate)
+
+    if 'discount_percent' in data:
+        inv.discount_percent = float(data['discount_percent'] or 0)
+
+    if 'notes' in data:
+        inv.notes = data['notes'].strip() or None if data['notes'] else None
+
+    if 'payment_terms_days' in data:
+        inv.payment_terms_days = int(data['payment_terms_days'] or 14)
+
+    # Recalculate due_date
+    inv.due_date = inv.date + timedelta(days=inv.payment_terms_days)
+
+    # Replace items if provided
+    if 'items' in data:
+        items = data['items']
+        if not items:
+            return jsonify({'error': 'items array must contain at least one item'}), 400
+        errors = []
+        for i, item in enumerate(items):
+            if not item.get('description', '').strip():
+                errors.append(f'items[{i}].description is required')
+            if item.get('unit_price') is None:
+                errors.append(f'items[{i}].unit_price is required')
+        if errors:
+            return jsonify({'errors': errors}), 400
+
+        InvoiceItem.query.filter_by(invoice_id=inv.id).delete()
+        _save_invoice_items_api(inv, items)
+
+    # Regenerate PDF if it existed
+    if inv.document_filename:
+        _generate_invoice_pdf_api(inv, settings)
+
+    db.session.commit()
+    return jsonify({'invoice': _invoice_to_dict(inv)})
+
+
+@api_bp.route('/invoices/<int:invoice_id>', methods=['DELETE'])
+@require_api_key
+def delete_invoice(invoice_id):
+    """Delete an invoice. Fails if a payment transaction is linked."""
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    if inv.linked_transaction_id:
+        return jsonify({
+            'error': 'Cannot delete an invoice with a linked payment. '
+                     'Unmark payment first via POST /invoices/:id/unmark-paid.'
+        }), 409
+
+    # Unlink from quote
+    if inv.quote_id:
+        quote = Quote.query.get(inv.quote_id)
+        if quote and quote.status == 'invoiced':
+            other = Invoice.query.filter(
+                Invoice.quote_id == quote.id,
+                Invoice.id != inv.id
+            ).count()
+            if other == 0:
+                quote.status = 'accepted'
+
+    if inv.document_filename:
+        _archive_document_api(inv.document_filename)
+
+    db.session.delete(inv)
+    db.session.commit()
+    return jsonify({'deleted': True, 'id': invoice_id})
+
+
+@api_bp.route('/invoices/<int:invoice_id>/status', methods=['POST', 'PUT'])
+@require_api_key
+def set_invoice_status(invoice_id):
+    """
+    Change invoice status (not paid – use mark-paid for that).
+    Body: { "status": "draft" | "sent" | "cancelled" }
+    """
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    data = request.get_json(force=True)
+    new_status = data.get('status', '').strip()
+    allowed = ['draft', 'sent', 'cancelled']
+    if new_status not in allowed:
+        return jsonify({
+            'error': f'Invalid status. Allowed: {", ".join(allowed)}. Use /mark-paid to set paid status.'
+        }), 400
+
+    if new_status == 'cancelled' and inv.linked_transaction_id:
+        return jsonify({
+            'error': 'Cannot cancel an invoice with a linked payment. Unmark payment first.'
+        }), 409
+
+    inv.status = new_status
+    db.session.commit()
+    return jsonify({'invoice': _invoice_to_dict(inv, include_items=False)})
+
+
+@api_bp.route('/invoices/<int:invoice_id>/generate-pdf', methods=['POST'])
+@require_api_key
+def generate_invoice_pdf(invoice_id):
+    """Generate or regenerate the invoice PDF."""
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    settings = SiteSettings.get_settings()
+    _generate_invoice_pdf_api(inv, settings)
+    db.session.commit()
+
+    return jsonify({
+        'invoice_id': inv.id,
+        'invoice_number': inv.invoice_number,
+        'has_pdf': True,
+        'message': 'PDF generated successfully.',
+    })
+
+
+@api_bp.route('/invoices/<int:invoice_id>/pdf', methods=['GET'])
+@require_api_key
+def download_invoice_pdf(invoice_id):
+    """Download the invoice PDF."""
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    if not inv.document_filename:
+        return jsonify({'error': 'No PDF available. Generate it first via POST /invoices/:id/generate-pdf.'}), 404
+
+    upload_folder = current_app.config['UPLOAD_FOLDER']
+    fp = os.path.join(upload_folder, inv.document_filename)
+    if not os.path.exists(fp):
+        return jsonify({'error': 'PDF file not found on disk.'}), 404
+
+    return send_from_directory(upload_folder, inv.document_filename,
+                               as_attachment=False,
+                               download_name=f'Rechnung_{inv.invoice_number}.pdf')
+
+
+@api_bp.route('/invoices/<int:invoice_id>/mark-paid', methods=['POST'])
+@require_api_key
+def mark_invoice_paid(invoice_id):
+    """
+    Mark invoice as paid → creates an accounting transaction.
+    Body: {
+        account_id:     int       (required)
+        category_id:    int       (optional)
+        payment_date:   "YYYY-MM-DD" (optional, default today)
+    }
+    """
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    if inv.status == 'paid':
+        return jsonify({'error': 'Invoice is already marked as paid.'}), 409
+
+    data = request.get_json(force=True)
+    settings = SiteSettings.get_settings()
+
+    account_id = data.get('account_id')
+    if not account_id:
+        return jsonify({'error': 'account_id is required'}), 400
+
+    acc = Account.query.get(account_id)
+    if not acc:
+        return jsonify({'error': f'Account {account_id} not found'}), 404
+
+    category_id = data.get('category_id')
+    if category_id is not None:
+        cat = Category.query.get(category_id)
+        if not cat:
+            return jsonify({'error': f'Category {category_id} not found'}), 404
+
+    payment_date = date.today()
+    if data.get('payment_date'):
+        try:
+            payment_date = parse_date(data['payment_date'])
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid payment_date format. Use YYYY-MM-DD.'}), 400
+
+    # Calculate tax
+    gross = inv.total
+    tax_treatment = inv.tax_treatment or 'none'
+    tax_rate = inv.tax_rate or 0
+
+    if settings.tax_mode == 'kleinunternehmer':
+        tax_treatment = 'none'
+        tax_rate = 0
+
+    if tax_rate > 0:
+        net_amount, tax_amount = calculate_tax(gross, tax_rate)
+    else:
+        net_amount = gross
+        tax_amount = 0
+
+    tx = Transaction(
+        date=payment_date,
+        type='income',
+        description=f'Rechnung {inv.invoice_number}'
+                    + (f' – {inv.customer.display_name}' if inv.customer else ''),
+        amount=gross,
+        net_amount=net_amount,
+        tax_amount=tax_amount,
+        tax_treatment=tax_treatment,
+        tax_rate=tax_rate if tax_rate > 0 else None,
+        category_id=category_id,
+        account_id=account_id,
+        linked_asset_id=inv.linked_asset_id,
+    )
+    db.session.add(tx)
+    db.session.flush()
+
+    # Attach invoice PDF as document to transaction
+    if inv.document_filename:
+        doc = Document(
+            filename=inv.document_filename,
+            original_filename=f'Rechnung_{inv.invoice_number}.pdf',
+            entity_type='transaction',
+            entity_id=tx.id,
+        )
+        db.session.add(doc)
+
+    inv.linked_transaction_id = tx.id
+    inv.status = 'paid'
+
+    db.session.commit()
+    return jsonify({
+        'invoice': _invoice_to_dict(inv, include_items=False),
+        'transaction': _tx_to_dict(tx),
+    })
+
+
+@api_bp.route('/invoices/<int:invoice_id>/unmark-paid', methods=['POST'])
+@require_api_key
+def unmark_invoice_paid(invoice_id):
+    """
+    Reverse paid status → deletes the linked accounting transaction.
+    Invoice status reverts to 'sent'.
+    """
+    inv = Invoice.query.get(invoice_id)
+    if not inv:
+        return jsonify({'error': f'Invoice {invoice_id} not found'}), 404
+
+    if inv.status != 'paid' or not inv.linked_transaction_id:
+        return jsonify({'error': 'Invoice is not marked as paid.'}), 409
+
+    tx = Transaction.query.get(inv.linked_transaction_id)
+    if tx:
+        Document.query.filter_by(entity_type='transaction', entity_id=tx.id).delete()
+        db.session.delete(tx)
+
+    inv.linked_transaction_id = None
+    inv.status = 'sent'
+
+    db.session.commit()
+    return jsonify({'invoice': _invoice_to_dict(inv, include_items=False)})

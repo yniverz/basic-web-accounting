@@ -853,7 +853,577 @@ Financial summary for a given year. EÜR figures exclude transfers and asset-lin
 
 ---
 
-## Error Responses
+### Quotes (Angebote)
+
+Quotes represent offers sent to customers. They can be created, edited, converted to invoices, and have PDFs generated.
+
+**Quote statuses:** `draft`, `sent`, `accepted`, `rejected`, `invoiced`
+
+#### `GET /quotes`
+
+List all quotes with optional filters and pagination.
+
+**Query Parameters:**
+
+| Param | Type | Description |
+|---|---|---|
+| `status` | string | Filter: `draft`, `sent`, `accepted`, `rejected`, `invoiced` |
+| `year` | int | Filter by year |
+| `customer_id` | int | Filter by customer |
+| `limit` | int | Max results (default 100, max 1000) |
+| `offset` | int | Pagination offset (default 0) |
+
+**Response:**
+```json
+{
+  "quotes": [
+    {
+      "id": 1,
+      "quote_number": "A-2026-0001",
+      "customer_id": 1,
+      "customer_name": "Musterfirma GmbH (Max Mustermann)",
+      "date": "2026-01-15",
+      "valid_until": "2026-02-15",
+      "status": "draft",
+      "tax_treatment": "standard",
+      "tax_rate": 19.0,
+      "discount_percent": 0,
+      "subtotal": 500.00,
+      "discount_amount": 0,
+      "total": 500.00,
+      "notes": null,
+      "agb_text": null,
+      "payment_terms_days": 14,
+      "linked_asset_id": null,
+      "has_pdf": false,
+      "created_at": "2026-01-15T10:30:00",
+      "updated_at": "2026-01-15T10:30:00"
+    }
+  ],
+  "total": 15,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+> **Note:** List endpoint does not include `items`. Use `GET /quotes/:id` for full details with items.
+
+---
+
+#### `POST /quotes`
+
+Create a new quote with line items.
+
+**Request Body:**
+```json
+{
+  "date": "2026-01-15",
+  "customer_id": 1,
+  "valid_until": "2026-02-15",
+  "tax_treatment": "standard",
+  "discount_percent": 5,
+  "notes": "Gültig bis Ende des Monats",
+  "agb_text": "Es gelten unsere AGB...",
+  "payment_terms_days": 14,
+  "items": [
+    {
+      "description": "Webdesign Startseite",
+      "quantity": 1,
+      "unit": "Stk.",
+      "unit_price": 500.00
+    },
+    {
+      "description": "SEO Optimierung",
+      "quantity": 3,
+      "unit": "Std.",
+      "unit_price": 120.00
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `date` | string | **yes** | `YYYY-MM-DD` |
+| `customer_id` | int | no | Customer ID |
+| `valid_until` | string | no | Validity date `YYYY-MM-DD` |
+| `tax_treatment` | string | no | See [Tax Treatment](#tax-treatment). Default: `none` |
+| `custom_tax_rate` | number | no | Only if `tax_treatment` = `custom` |
+| `discount_percent` | number | no | Discount in percent (default 0) |
+| `notes` | string | no | Notes / remarks on the quote |
+| `agb_text` | string | no | Terms & conditions text |
+| `payment_terms_days` | int | no | Payment terms in days (default 14) |
+| `linked_asset_id` | int | no | Link to an asset |
+| `items` | array | **yes** | At least one line item (see below) |
+
+**Item fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `description` | string | **yes** | Line item description |
+| `quantity` | number | no | Quantity (default 1) |
+| `unit` | string | no | Unit label (default "Stk.") |
+| `unit_price` | number | **yes** | Gross price per unit |
+| `position` | int | no | Position number (auto-assigned if omitted) |
+
+**Response:** `201 Created`
+```json
+{
+  "quote": {
+    "id": 1,
+    "quote_number": "A-2026-0001",
+    "items": [
+      { "id": 1, "position": 1, "description": "Webdesign Startseite", "quantity": 1, "unit": "Stk.", "unit_price": 500.00, "total": 500.00 },
+      { "id": 2, "position": 2, "description": "SEO Optimierung", "quantity": 3, "unit": "Std.", "unit_price": 120.00, "total": 360.00 }
+    ],
+    "subtotal": 860.00,
+    "discount_amount": 43.00,
+    "total": 817.00,
+    "..."
+  }
+}
+```
+
+---
+
+#### `GET /quotes/:id`
+
+Get a single quote by ID with all items.
+
+**Response:**
+```json
+{
+  "quote": {
+    "id": 1,
+    "quote_number": "A-2026-0001",
+    "customer_id": 1,
+    "customer_name": "Musterfirma GmbH (Max Mustermann)",
+    "date": "2026-01-15",
+    "valid_until": "2026-02-15",
+    "status": "draft",
+    "tax_treatment": "standard",
+    "tax_rate": 19.0,
+    "discount_percent": 5,
+    "subtotal": 860.00,
+    "discount_amount": 43.00,
+    "total": 817.00,
+    "notes": null,
+    "agb_text": null,
+    "payment_terms_days": 14,
+    "linked_asset_id": null,
+    "has_pdf": true,
+    "items": [
+      { "id": 1, "position": 1, "description": "Webdesign Startseite", "quantity": 1, "unit": "Stk.", "unit_price": 500.00, "total": 500.00 }
+    ],
+    "created_at": "2026-01-15T10:30:00",
+    "updated_at": "2026-01-15T10:30:00"
+  }
+}
+```
+
+**Errors:** `404` if not found.
+
+---
+
+#### `PUT /quotes/:id`
+
+Update a quote. Only provided fields are changed. If `items` is provided, all existing items are **replaced**.
+
+> **Restriction:** Invoiced quotes (`status: "invoiced"`) cannot be edited → `409`.
+
+**Request Body:** (all fields optional)
+```json
+{
+  "notes": "Updated notes",
+  "discount_percent": 10,
+  "items": [
+    { "description": "Updated item", "quantity": 2, "unit": "Stk.", "unit_price": 250.00 }
+  ]
+}
+```
+
+**Response:** `200 OK` with updated quote (including items).
+
+---
+
+#### `DELETE /quotes/:id`
+
+Delete a quote. Fails if invoices reference it.
+
+**Response:**
+```json
+{ "deleted": true, "id": 1 }
+```
+
+**Errors:** `404` if not found, `409` if linked invoices exist.
+
+---
+
+#### `POST /quotes/:id/status`
+
+Change a quote's status.
+
+**Request Body:**
+```json
+{ "status": "sent" }
+```
+
+| Value | Meaning |
+|---|---|
+| `draft` | Entwurf |
+| `sent` | Versendet |
+| `accepted` | Angenommen |
+| `rejected` | Abgelehnt |
+
+> **Note:** `invoiced` is set automatically when creating an invoice from the quote.
+
+**Response:**
+```json
+{
+  "quote": { "id": 1, "status": "sent", "..." }
+}
+```
+
+---
+
+#### `POST /quotes/:id/generate-pdf`
+
+Generate (or regenerate) the quote PDF.
+
+**Response:**
+```json
+{
+  "quote_id": 1,
+  "quote_number": "A-2026-0001",
+  "has_pdf": true,
+  "message": "PDF generated successfully."
+}
+```
+
+---
+
+#### `GET /quotes/:id/pdf`
+
+Download the quote PDF file.
+
+**Response:** Binary PDF file content, or `404` if no PDF exists.
+
+**Example (cURL):**
+```bash
+curl https://your-host/api/v1/quotes/1/pdf \
+  -H "Authorization: Bearer your-api-key" \
+  -o Angebot_A-2026-0001.pdf
+```
+
+---
+
+#### `POST /quotes/:id/create-invoice`
+
+Create an invoice from a quote. Copies all items. Marks quote as `invoiced`. Generates invoice PDF automatically.
+
+**Request Body:** (optional)
+```json
+{ "date": "2026-02-01" }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `date` | string | no | Invoice date (default: today) |
+
+**Response:** `201 Created`
+```json
+{
+  "invoice": {
+    "id": 1,
+    "invoice_number": "R-2026-0001",
+    "quote_id": 1,
+    "status": "draft",
+    "items": [...],
+    "..."
+  }
+}
+```
+
+**Errors:** `409` if quote is already invoiced.
+
+---
+
+### Invoices (Rechnungen)
+
+Invoices can be created directly or from a quote. They support PDF generation, payment tracking (with automatic accounting transaction creation), and status management.
+
+**Invoice statuses:** `draft`, `sent`, `paid`, `cancelled`
+
+#### `GET /invoices`
+
+List all invoices with optional filters, pagination, and aggregated totals.
+
+**Query Parameters:**
+
+| Param | Type | Description |
+|---|---|---|
+| `status` | string | Filter: `draft`, `sent`, `paid`, `cancelled` |
+| `year` | int | Filter by year |
+| `customer_id` | int | Filter by customer |
+| `limit` | int | Max results (default 100, max 1000) |
+| `offset` | int | Pagination offset (default 0) |
+
+**Response:**
+```json
+{
+  "invoices": [
+    {
+      "id": 1,
+      "invoice_number": "R-2026-0001",
+      "quote_id": null,
+      "customer_id": 1,
+      "customer_name": "Musterfirma GmbH (Max Mustermann)",
+      "date": "2026-01-15",
+      "due_date": "2026-01-29",
+      "status": "sent",
+      "tax_treatment": "standard",
+      "tax_rate": 19.0,
+      "discount_percent": 0,
+      "subtotal": 500.00,
+      "discount_amount": 0,
+      "total": 500.00,
+      "notes": null,
+      "payment_terms_days": 14,
+      "linked_asset_id": null,
+      "linked_transaction_id": null,
+      "has_pdf": true,
+      "created_at": "2026-01-15T10:30:00",
+      "updated_at": "2026-01-15T10:30:00"
+    }
+  ],
+  "total": 25,
+  "limit": 100,
+  "offset": 0,
+  "total_amount": 12500.00,
+  "paid_amount": 8000.00,
+  "open_amount": 4500.00
+}
+```
+
+> **Note:** List endpoint does not include `items`. Use `GET /invoices/:id` for full details. `total_amount`, `paid_amount`, `open_amount` are computed over the filtered result set.
+
+---
+
+#### `POST /invoices`
+
+Create a new invoice directly (without a quote).
+
+**Request Body:**
+```json
+{
+  "date": "2026-01-15",
+  "customer_id": 1,
+  "tax_treatment": "standard",
+  "discount_percent": 0,
+  "notes": "Zahlung innerhalb von 14 Tagen",
+  "payment_terms_days": 14,
+  "items": [
+    {
+      "description": "Webdesign Startseite",
+      "quantity": 1,
+      "unit": "Stk.",
+      "unit_price": 500.00
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `date` | string | **yes** | `YYYY-MM-DD` |
+| `customer_id` | int | **yes** | Customer ID |
+| `tax_treatment` | string | no | See [Tax Treatment](#tax-treatment). Default: `none` |
+| `custom_tax_rate` | number | no | Only if `tax_treatment` = `custom` |
+| `discount_percent` | number | no | Discount in percent (default 0) |
+| `notes` | string | no | Notes / remarks |
+| `payment_terms_days` | int | no | Payment terms in days (default 14) |
+| `linked_asset_id` | int | no | Link to an asset |
+| `items` | array | **yes** | At least one line item (same schema as quotes) |
+
+**Response:** `201 Created`
+```json
+{
+  "invoice": {
+    "id": 1,
+    "invoice_number": "R-2026-0001",
+    "due_date": "2026-01-29",
+    "status": "draft",
+    "items": [...],
+    "..."
+  }
+}
+```
+
+---
+
+#### `GET /invoices/:id`
+
+Get a single invoice by ID with all items.
+
+**Response:**
+```json
+{
+  "invoice": {
+    "id": 1,
+    "invoice_number": "R-2026-0001",
+    "customer_id": 1,
+    "customer_name": "Musterfirma GmbH (Max Mustermann)",
+    "date": "2026-01-15",
+    "due_date": "2026-01-29",
+    "status": "sent",
+    "items": [
+      { "id": 1, "position": 1, "description": "Webdesign Startseite", "quantity": 1, "unit": "Stk.", "unit_price": 500.00, "total": 500.00 }
+    ],
+    "..."
+  }
+}
+```
+
+**Errors:** `404` if not found.
+
+---
+
+#### `PUT /invoices/:id`
+
+Update an invoice. Only provided fields are changed. If `items` is provided, all existing items are **replaced**. `due_date` is recalculated automatically.
+
+> **Restriction:** Paid invoices cannot be edited → `409`. Unmark payment first.
+
+**Request Body:** (all fields optional)
+```json
+{
+  "discount_percent": 10,
+  "notes": "Updated notes",
+  "items": [
+    { "description": "Updated item", "quantity": 2, "unit": "Stk.", "unit_price": 250.00 }
+  ]
+}
+```
+
+**Response:** `200 OK` with updated invoice (including items).
+
+---
+
+#### `DELETE /invoices/:id`
+
+Delete an invoice. Fails if a payment transaction is linked.
+
+**Response:**
+```json
+{ "deleted": true, "id": 1 }
+```
+
+**Errors:** `404` if not found, `409` if payment is linked (unmark paid first).
+
+---
+
+#### `POST /invoices/:id/status`
+
+Change an invoice's status.
+
+**Request Body:**
+```json
+{ "status": "sent" }
+```
+
+| Value | Meaning |
+|---|---|
+| `draft` | Entwurf |
+| `sent` | Versendet |
+| `cancelled` | Storniert |
+
+> **Note:** To set `paid`, use `POST /invoices/:id/mark-paid`. Cancelling an invoice with a linked payment is not allowed.
+
+**Response:**
+```json
+{
+  "invoice": { "id": 1, "status": "sent", "..." }
+}
+```
+
+---
+
+#### `POST /invoices/:id/generate-pdf`
+
+Generate (or regenerate) the invoice PDF. Includes ZUGFeRD XML embedding when possible.
+
+**Response:**
+```json
+{
+  "invoice_id": 1,
+  "invoice_number": "R-2026-0001",
+  "has_pdf": true,
+  "message": "PDF generated successfully."
+}
+```
+
+---
+
+#### `GET /invoices/:id/pdf`
+
+Download the invoice PDF file.
+
+**Response:** Binary PDF file content, or `404` if no PDF exists.
+
+**Example (cURL):**
+```bash
+curl https://your-host/api/v1/invoices/1/pdf \
+  -H "Authorization: Bearer your-api-key" \
+  -o Rechnung_R-2026-0001.pdf
+```
+
+---
+
+#### `POST /invoices/:id/mark-paid`
+
+Mark an invoice as paid. Creates an income transaction in the accounting system with the invoice total. Attaches the invoice PDF to the transaction.
+
+**Request Body:**
+```json
+{
+  "account_id": 1,
+  "category_id": 3,
+  "payment_date": "2026-02-01"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `account_id` | int | **yes** | Account to book the income to |
+| `category_id` | int | no | Income category |
+| `payment_date` | string | no | `YYYY-MM-DD` (default: today) |
+
+**Response:**
+```json
+{
+  "invoice": { "id": 1, "status": "paid", "linked_transaction_id": 42, "..." },
+  "transaction": { "id": 42, "type": "income", "amount": 500.00, "..." }
+}
+```
+
+**Errors:** `409` if already paid.
+
+---
+
+#### `POST /invoices/:id/unmark-paid`
+
+Reverse a paid invoice → deletes the linked accounting transaction. Invoice status reverts to `sent`.
+
+**Response:**
+```json
+{
+  "invoice": { "id": 1, "status": "sent", "linked_transaction_id": null, "..." }
+}
+```
+
+**Errors:** `409` if invoice is not paid.
+
+---
 
 All errors follow this format:
 
@@ -948,5 +1518,118 @@ curl https://your-host/api/v1/summary?year=2026 \
 ```bash
 # Filter transactions by account
 curl "https://your-host/api/v1/transactions?account_id=1&year=2026" \
+  -H "Authorization: Bearer your-api-key"
+```
+
+---
+
+## Example: Quote → Invoice → Payment Flow (cURL)
+
+```bash
+# 1. Create a customer
+curl -X POST https://your-host/api/v1/customers \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Max Mustermann",
+    "company": "Musterfirma GmbH",
+    "address": "Musterstr. 1\n12345 Musterstadt",
+    "email": "max@example.com"
+  }'
+```
+
+```bash
+# 2. Create a quote
+curl -X POST https://your-host/api/v1/quotes \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "date": "2026-02-01",
+    "customer_id": 1,
+    "valid_until": "2026-03-01",
+    "tax_treatment": "standard",
+    "payment_terms_days": 14,
+    "items": [
+      {"description": "Webdesign", "quantity": 1, "unit_price": 1500.00},
+      {"description": "SEO Optimierung", "quantity": 5, "unit": "Std.", "unit_price": 120.00}
+    ]
+  }'
+```
+
+```bash
+# 3. Generate quote PDF
+curl -X POST https://your-host/api/v1/quotes/1/generate-pdf \
+  -H "Authorization: Bearer your-api-key"
+```
+
+```bash
+# 4. Set quote status to sent
+curl -X POST https://your-host/api/v1/quotes/1/status \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "sent"}'
+```
+
+```bash
+# 5. Mark quote as accepted
+curl -X POST https://your-host/api/v1/quotes/1/status \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "accepted"}'
+```
+
+```bash
+# 6. Create invoice from quote (auto-generates PDF)
+curl -X POST https://your-host/api/v1/quotes/1/create-invoice \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"date": "2026-02-15"}'
+```
+
+```bash
+# 7. Set invoice status to sent
+curl -X POST https://your-host/api/v1/invoices/1/status \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "sent"}'
+```
+
+```bash
+# 8. Mark invoice as paid (creates accounting transaction)
+curl -X POST https://your-host/api/v1/invoices/1/mark-paid \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account_id": 1,
+    "category_id": 3,
+    "payment_date": "2026-03-01"
+  }'
+```
+
+```bash
+# Create an invoice directly (without quote)
+curl -X POST https://your-host/api/v1/invoices \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "date": "2026-02-20",
+    "customer_id": 1,
+    "tax_treatment": "standard",
+    "items": [
+      {"description": "Beratung", "quantity": 2, "unit": "Std.", "unit_price": 150.00}
+    ]
+  }'
+```
+
+```bash
+# Download invoice PDF
+curl https://your-host/api/v1/invoices/1/pdf \
+  -H "Authorization: Bearer your-api-key" \
+  -o Rechnung.pdf
+```
+
+```bash
+# List open invoices
+curl "https://your-host/api/v1/invoices?status=sent&year=2026" \
   -H "Authorization: Bearer your-api-key"
 ```
