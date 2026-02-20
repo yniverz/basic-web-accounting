@@ -22,6 +22,11 @@
     {% if integrity.total > 0 %}
     <span class="text-sm">({{ integrity.total }} Einträge geprüft)</span>
     {% endif %}
+    {% if not integrity.valid %}
+    <form method="POST" action="{{ url_for('admin.audit_repair') }}" style="display:inline; margin-left: 1rem;">
+        <button type="submit" class="btn btn-sm" onclick="return confirm('Hash-Kette ab dem Bruch neu berechnen?')">🔧 Kette reparieren</button>
+    </form>
+    {% endif %}
 </div>
 {% endif %}
 

@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account, Document, AuditLog
 from werkzeug.security import generate_password_hash
-from audit import archive_file, verify_integrity
+from audit import archive_file, verify_integrity, repair_chain
 from helpers import parse_date, parse_amount, calculate_tax, calculate_tax_from_net, get_year_choices, get_month_names, format_currency, TAX_TREATMENT_LABELS, get_tax_rate_for_treatment
 from depreciation import (
     get_depreciation_schedule, get_depreciation_for_year, get_book_value,
@@ -1970,6 +1970,7 @@ def user_edit(id):
                 flash('Passwort muss mindestens 6 Zeichen lang sein.', 'error')
                 return render_template('user_form.html', user=user)
             user.password_hash = generate_password_hash(password)
+            db.session.flush()  # ensure automatic UPDATE audit entry is created first
             from audit import log_action
             log_action('PASSWORD_CHANGE', 'User', user.id,
                        new_values={'changed_by': current_user.username})
@@ -2095,4 +2096,16 @@ def audit_verify():
         'broken_id': broken_id,
         'message': message,
     }
+    return redirect(url_for('admin.audit_log'))
+
+
+@admin_bp.route('/audit/repair', methods=['POST'])
+def audit_repair():
+    """Repair broken hash chain by recalculating hashes."""
+    if not current_user.is_admin:
+        flash('Nur Administratoren können die Kette reparieren.', 'error')
+        return redirect(url_for('admin.dashboard'))
+
+    repaired, message = repair_chain(db)
+    flash(message, 'success' if repaired else 'info')
     return redirect(url_for('admin.audit_log'))

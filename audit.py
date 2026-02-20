@@ -161,7 +161,14 @@ def _write_audit(db_session, action, entity_type, entity_id,
 
 
 def _get_previous_hash_from_session(db_session):
-    """Get previous hash, considering unflushed audit entries in the session."""
+    """Get previous hash, considering unflushed audit entries in the session.
+
+    NOTE: The DB query may trigger an autoflush when the session has dirty
+    objects.  That autoflush fires before_flush / after_flush, which can
+    create *new* AuditLog entries in session.new.  We therefore re-check
+    session.new **after** the query to pick up any entries produced by the
+    autoflush that were not yet present during the first check.
+    """
     from models import AuditLog
     # Check for unflushed AuditLog objects first
     pending = [obj for obj in db_session.new if isinstance(obj, AuditLog)]
@@ -170,6 +177,12 @@ def _get_previous_hash_from_session(db_session):
         return pending[-1].entry_hash
     last = db_session.query(AuditLog.entry_hash) \
         .order_by(AuditLog.id.desc()).first()
+    # Re-check: autoflush during the query above may have created new
+    # AuditLog entries (via the after_flush listener) that are not yet
+    # written to the DB but already sitting in session.new.
+    pending = [obj for obj in db_session.new if isinstance(obj, AuditLog)]
+    if pending:
+        return pending[-1].entry_hash
     return last[0] if last else '0' * 64
 
 
@@ -327,6 +340,55 @@ def verify_integrity(db):
         prev_hash = entry.entry_hash
 
     return True, len(entries), None, f'Alle {len(entries)} Einträge sind integer.'
+
+
+def repair_chain(db):
+    """
+    Recalculate previous_hash and entry_hash for every audit entry from the
+    first broken link onwards, restoring a valid chain.
+
+    Returns:
+        (repaired: int, message: str)
+    """
+    from models import AuditLog
+
+    entries = AuditLog.query.order_by(AuditLog.id.asc()).all()
+    if not entries:
+        return 0, 'Keine Einträge vorhanden.'
+
+    repaired = 0
+    prev_hash = '0' * 64
+
+    for entry in entries:
+        needs_fix = False
+
+        if entry.previous_hash != prev_hash:
+            needs_fix = True
+
+        expected = _compute_hash(
+            prev_hash,
+            entry.timestamp.isoformat(),
+            entry.action,
+            entry.entity_type,
+            entry.entity_id,
+            entry.old_values,
+            entry.new_values,
+        )
+
+        if needs_fix or entry.entry_hash != expected:
+            entry.previous_hash = prev_hash
+            entry.entry_hash = expected
+            repaired += 1
+
+        prev_hash = entry.entry_hash
+
+    if repaired:
+        db.session.commit()
+
+    return repaired, (
+        f'{repaired} Einträge repariert.' if repaired
+        else 'Kette ist bereits integer — nichts zu reparieren.'
+    )
 
 
 # ── Initialisation ─────────────────────────────────────────────────────────

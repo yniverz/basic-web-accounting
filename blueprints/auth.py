@@ -73,6 +73,7 @@ def profile():
                 flash('Passwort muss mindestens 6 Zeichen lang sein.', 'error')
                 return redirect(url_for('auth.profile'))
             current_user.password_hash = generate_password_hash(new_password)
+            db.session.flush()  # ensure automatic UPDATE audit entry is created first
             log_action('PASSWORD_CHANGE', 'User', current_user.id,
                        new_values={'changed_by': 'self'})
 
