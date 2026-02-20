@@ -2,7 +2,7 @@ import os
 import hashlib
 from flask import Flask, send_file, request
 from flask_login import LoginManager
-from models import db, User, SiteSettings, Account
+from models import db, User, SiteSettings, Account, Document
 from werkzeug.security import generate_password_hash
 from helpers import format_currency, format_date
 
@@ -81,6 +81,11 @@ def create_app():
     # Template filters
     app.jinja_env.filters['currency'] = format_currency
     app.jinja_env.filters['date_format'] = format_date
+
+    # Template globals – helper to load documents for an entity
+    def get_documents(entity_type, entity_id):
+        return Document.query.filter_by(entity_type=entity_type, entity_id=entity_id).all()
+    app.jinja_env.globals['get_documents'] = get_documents
 
     # Static file serving with minification and ETag caching
     @app.route('/static/<path:filename>')
@@ -219,7 +224,47 @@ def _migrate_schema(db):
         cursor.execute("UPDATE transactions SET account_id = ? WHERE account_id IS NULL", (bank_id,))
         conn.commit()
 
+    # Ensure documents table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename VARCHAR(300) NOT NULL,
+            original_filename VARCHAR(300),
+            entity_type VARCHAR(20) NOT NULL,
+            entity_id INTEGER NOT NULL,
+            created_at DATETIME
+        )
+    """)
+    conn.commit()
+
+    # Migrate legacy document_filename from transactions and assets into documents table
+    _migrate_legacy_documents(cursor, conn, 'transactions', 'transaction')
+    _migrate_legacy_documents(cursor, conn, 'assets', 'asset')
+
     conn.close()
+
+
+def _migrate_legacy_documents(cursor, conn, table, entity_type):
+    """Move existing document_filename values into the documents table."""
+    try:
+        cursor.execute(f"SELECT id, document_filename FROM {table} WHERE document_filename IS NOT NULL AND document_filename != ''")
+    except Exception:
+        return  # column doesn't exist yet
+
+    rows = cursor.fetchall()
+    for entity_id, filename in rows:
+        # Check if already migrated
+        cursor.execute(
+            "SELECT COUNT(*) FROM documents WHERE entity_type = ? AND entity_id = ? AND filename = ?",
+            (entity_type, entity_id, filename),
+        )
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(
+                "INSERT INTO documents (filename, original_filename, entity_type, entity_id, created_at) "
+                "VALUES (?, ?, ?, ?, datetime('now'))",
+                (filename, filename, entity_type, entity_id),
+            )
+    conn.commit()
 
 
 def _seed_defaults(app):

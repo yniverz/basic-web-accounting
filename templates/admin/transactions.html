@@ -151,8 +151,11 @@
                     </td>
                     {% endif %}
                     <td>
-                        {% if t.document_filename %}
-                        <a href="{{ url_for('admin.uploaded_file', filename=t.document_filename) }}" target="_blank" class="text-accent text-sm">📎 Beleg</a>
+                        {% set t_docs = get_documents('transaction', t.id) %}
+                        {% if t_docs %}
+                        {% for doc in t_docs %}
+                        <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent text-sm" title="{{ doc.original_filename or doc.filename }}">📎</a>
+                        {% endfor %}
                         {% else %}
                         <span class="text-muted text-sm">–</span>
                         {% endif %}

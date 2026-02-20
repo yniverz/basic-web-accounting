@@ -133,12 +133,25 @@
         </div>
 
         <div class="form-group">
-            <label for="document">Beleg / Dokument</label>
-            <input type="file" id="document" name="document" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
-            {% if transaction and transaction.document_filename %}
-            <div class="mt-6 text-sm">
-                Aktuell: <a href="{{ url_for('admin.uploaded_file', filename=transaction.document_filename) }}" target="_blank" class="text-accent">{{ transaction.document_filename }}</a>
+            <label for="documents">Belege / Dokumente</label>
+            <input type="file" id="documents" name="documents" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp" multiple>
+            <div class="text-muted text-xs mt-4">Mehrere Dateien möglich (PDF, PNG, JPG, GIF, WebP)</div>
+            {% if transaction %}
+            {% set docs = get_documents('transaction', transaction.id) %}
+            {% if docs %}
+            <div class="mt-6">
+                <div class="text-sm text-muted mb-4">Vorhandene Dokumente:</div>
+                {% for doc in docs %}
+                <div class="d-flex align-center gap-6 mb-4">
+                    <label class="text-sm">
+                        <input type="checkbox" name="remove_documents" value="{{ doc.id }}">
+                        Entfernen
+                    </label>
+                    <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent text-sm">📎 {{ doc.original_filename or doc.filename }}</a>
+                </div>
+                {% endfor %}
             </div>
+            {% endif %}
             {% endif %}
         </div>
 

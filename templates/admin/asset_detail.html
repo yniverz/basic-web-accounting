@@ -118,10 +118,15 @@
         <div>{{ asset.depreciation_category.name }}</div>
     </div>
     {% endif %}
-    {% if asset.document_filename %}
+    {% set docs = get_documents('asset', asset.id) %}
+    {% if docs %}
     <div class="mt-16">
-        <div class="text-muted text-sm mb-4">Beleg</div>
-        <a href="{{ url_for('admin.uploaded_file', filename=asset.document_filename) }}" target="_blank" class="text-accent">📎 {{ asset.document_filename }}</a>
+        <div class="text-muted text-sm mb-4">Belege</div>
+        {% for doc in docs %}
+        <div class="mb-4">
+            <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent">📎 {{ doc.original_filename or doc.filename }}</a>
+        </div>
+        {% endfor %}
     </div>
     {% endif %}
     {% if asset.notes %}

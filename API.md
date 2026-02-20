@@ -393,6 +393,7 @@ List transactions with filtering, search, and pagination.
       "account_id": 1,
       "account_name": "Bank",
       "notes": "Wohnung A",
+      "documents": [],
       "document_filename": null,
       "created_at": "2026-01-15T10:30:00",
       "updated_at": "2026-01-15T10:30:00"
@@ -457,6 +458,7 @@ Create a single transaction. For transfers between accounts, use `POST /transfer
     "account_id": 1,
     "account_name": "Bank",
     "notes": "Wohnung A",
+    "documents": [],
     "document_filename": null,
     "created_at": "2026-01-15T10:30:00",
     "updated_at": "2026-01-15T10:30:00"
@@ -577,66 +579,98 @@ Delete a transaction. Associated document files are also removed.
 
 ### Transaction Documents
 
-Attach, download, or remove document files (receipts, invoices, etc.) from transactions. Allowed file types: **pdf, png, jpg, jpeg, gif, webp**. Max file size: **16 MB**.
+Attach, download, or remove document files (receipts, invoices, etc.) from transactions. Multiple documents can be attached to a single transaction. Allowed file types: **pdf, png, jpg, jpeg, gif, webp**. Max upload size: **16 MB**.
 
-#### `POST /transactions/:id/document`
+#### `POST /transactions/:id/documents`
 
-Upload or replace a document attachment for a transaction. Uses `multipart/form-data` (not JSON).
+Upload one or more documents to a transaction. Uses `multipart/form-data` (not JSON). New documents are **appended** to any existing ones.
 
 **Request:** `Content-Type: multipart/form-data`
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `document` | file | ✅ | The file to attach |
+| `documents` | file(s) | ✅ | One or more files to attach |
 
 **Response:** `201 Created`
 ```json
 {
   "transaction_id": 42,
-  "document_filename": "20260115_103000_rechnung.pdf"
+  "documents": [
+    { "id": 1, "filename": "20260115_103000_rechnung.pdf", "original_filename": "rechnung.pdf" },
+    { "id": 2, "filename": "20260115_103000_foto.jpg", "original_filename": "foto.jpg" }
+  ],
+  "errors": []
 }
 ```
 
-**Errors:**
-- `400` – No file provided or file type not allowed
-- `404` – Transaction not found
-
-**Example (cURL):**
-```bash
-curl -X POST https://your-host/api/v1/transactions/42/document \
-  -H "Authorization: Bearer your-api-key" \
-  -F "document=@/path/to/rechnung.pdf"
+If some files fail validation, valid ones are still saved and failures are reported in `errors`:
+```json
+{
+  "transaction_id": 42,
+  "documents": [ { "id": 1, "filename": "...", "original_filename": "rechnung.pdf" } ],
+  "errors": [ { "index": 1, "filename": "data.exe", "error": "File type not allowed. Allowed: gif, jpeg, jpg, pdf, png, webp" } ]
+}
 ```
 
-> **Note:** If the transaction already has a document, uploading a new one replaces the old file.
+**Example (cURL) – single file:**
+```bash
+curl -X POST https://your-host/api/v1/transactions/42/documents \
+  -H "Authorization: Bearer your-api-key" \
+  -F "documents=@/path/to/rechnung.pdf"
+```
+
+**Example (cURL) – multiple files:**
+```bash
+curl -X POST https://your-host/api/v1/transactions/42/documents \
+  -H "Authorization: Bearer your-api-key" \
+  -F "documents=@/path/to/rechnung.pdf" \
+  -F "documents=@/path/to/foto.jpg"
+```
 
 ---
 
-#### `GET /transactions/:id/document`
+#### `GET /transactions/:id/documents`
 
-Download the document attached to a transaction. Returns the raw file with the appropriate content type.
+List all documents attached to a transaction.
 
-**Response:** The file content (binary) with `Content-Type` matching the file type, or `404` if no document is attached.
+**Response:**
+```json
+{
+  "transaction_id": 42,
+  "documents": [
+    { "id": 1, "filename": "20260115_103000_rechnung.pdf", "original_filename": "rechnung.pdf", "created_at": "2026-01-15T10:30:00" },
+    { "id": 2, "filename": "20260115_103000_foto.jpg", "original_filename": "foto.jpg", "created_at": "2026-01-15T10:30:05" }
+  ]
+}
+```
+
+---
+
+#### `GET /transactions/:id/documents/:doc_id`
+
+Download a specific document by its ID. Returns the raw file with the appropriate content type.
+
+**Response:** Binary file content with matching `Content-Type`, or `404` if not found.
 
 **Example (cURL):**
 ```bash
-curl https://your-host/api/v1/transactions/42/document \
+curl https://your-host/api/v1/transactions/42/documents/1 \
   -H "Authorization: Bearer your-api-key" \
   -o rechnung.pdf
 ```
 
 ---
 
-#### `DELETE /transactions/:id/document`
+#### `DELETE /transactions/:id/documents/:doc_id`
 
-Remove the document from a transaction. The file is deleted from disk.
+Remove a specific document from a transaction. The file is deleted from disk.
 
 **Response:**
 ```json
-{ "deleted": true, "transaction_id": 42 }
+{ "deleted": true, "document_id": 1, "transaction_id": 42 }
 ```
 
-**Error (404):** Transaction not found, or no document attached.
+**Error (404):** Transaction or document not found.
 
 ---
 

@@ -242,3 +242,21 @@ class ChatHistory(db.Model):
 
     def __repr__(self):
         return f'<ChatHistory user_id={self.user_id}>'
+
+
+class Document(db.Model):
+    """
+    A file attachment linked to a transaction or asset.
+    Multiple documents can be attached to a single entity.
+    """
+    __tablename__ = 'documents'
+
+    id = db.Column(db.Integer, primary_key=True)
+    filename = db.Column(db.String(300), nullable=False)          # stored filename on disk
+    original_filename = db.Column(db.String(300), nullable=True)  # user-facing original name
+    entity_type = db.Column(db.String(20), nullable=False)        # 'transaction' or 'asset'
+    entity_id = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<Document {self.filename} ({self.entity_type}:{self.entity_id})>'

@@ -26,7 +26,7 @@ from helpers import (
     TAX_TREATMENT_LABELS,
 )
 from models import (
-    Account, Asset, Category, ChatHistory, DepreciationCategory, SiteSettings, Transaction, User, db,
+    Account, Asset, Category, ChatHistory, DepreciationCategory, Document, SiteSettings, Transaction, User, db,
 )
 from depreciation import (
     DEPRECIATION_METHODS, get_book_value, get_depreciation_for_year,
@@ -669,7 +669,9 @@ def _tx_to_dict(t):
         'transfer_to_account_name': t.transfer_to_account.name if t.transfer_to_account else None,
         'linked_asset_id': t.linked_asset_id,
         'notes': t.notes,
-        'document_filename': t.document_filename,
+        'documents': [{'id': d.id, 'filename': d.filename, 'original_filename': d.original_filename}
+                       for d in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all()],
+        'document_filename': t.document_filename,  # legacy
     }
 
 
@@ -876,11 +878,13 @@ def execute_tool(name, args):
             return {'error': f"Transaction {args['id']} not found"}
         if t.linked_asset_id:
             return {'error': 'Cannot delete a linked asset transaction. Delete the asset instead.'}
-        if t.document_filename:
+        # Remove all attached documents
+        for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
             from flask import current_app
-            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
+            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
             if os.path.exists(fp):
                 os.remove(fp)
+            db.session.delete(doc)
         db.session.delete(t)
         db.session.commit()
         return {'status': 'deleted', 'id': args['id']}
@@ -999,6 +1003,7 @@ def execute_tool(name, args):
                         items.remove(a)
                 elif new_quantity > old_count:
                     rep = items[0]
+                    rep_docs = Document.query.filter_by(entity_type='asset', entity_id=rep.id).all()
                     for _ in range(new_quantity - old_count):
                         new_asset = Asset(
                             bundle_id=args['bundle_id'],
@@ -1010,10 +1015,16 @@ def execute_tool(name, args):
                             useful_life_months=rep.useful_life_months,
                             salvage_value=rep.salvage_value or 0,
                             depreciation_category_id=rep.depreciation_category_id,
-                            document_filename=rep.document_filename,
                         )
                         db.session.add(new_asset)
                         items.append(new_asset)
+                    db.session.flush()
+                    # Copy documents from representative to new items
+                    for new_asset in items[-(new_quantity - old_count):]:
+                        for rd in rep_docs:
+                            doc = Document(filename=rd.filename, original_filename=rd.original_filename,
+                                           entity_type='asset', entity_id=new_asset.id)
+                            db.session.add(doc)
                     db.session.flush()  # assign IDs to new items
 
             count = len(items)
@@ -1091,12 +1102,14 @@ def execute_tool(name, args):
             removed_files = set()
             for a in items:
                 Transaction.query.filter_by(linked_asset_id=a.id).delete()
-                if a.document_filename and a.document_filename not in removed_files:
-                    from flask import current_app
-                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
-                    if os.path.exists(fp):
-                        os.remove(fp)
-                    removed_files.add(a.document_filename)
+                for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
+                    if doc.filename not in removed_files:
+                        from flask import current_app
+                        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+                        if os.path.exists(fp):
+                            os.remove(fp)
+                        removed_files.add(doc.filename)
+                    db.session.delete(doc)
                 db.session.delete(a)
             db.session.commit()
             return {'status': 'deleted', 'count': count, 'bundle_id': args['bundle_id']}
@@ -1108,11 +1121,13 @@ def execute_tool(name, args):
         if not a:
             return {'error': f"Asset {args['id']} not found"}
         Transaction.query.filter_by(linked_asset_id=a.id).delete()
-        if a.document_filename:
+        # Remove all attached documents
+        for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
             from flask import current_app
-            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
+            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
             if os.path.exists(fp):
                 os.remove(fp)
+            db.session.delete(doc)
         db.session.delete(a)
         db.session.commit()
         return {'status': 'deleted', 'id': args['id']}

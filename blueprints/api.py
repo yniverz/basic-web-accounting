@@ -19,7 +19,7 @@ from helpers import (
     calculate_tax, get_tax_rate_for_treatment, parse_date,
     TAX_TREATMENT_LABELS,
 )
-from models import Account, Category, SiteSettings, Transaction, db
+from models import Account, Category, Document, SiteSettings, Transaction, db
 
 api_bp = Blueprint('api', __name__)
 
@@ -70,6 +70,7 @@ def _apply_tax(amount_gross, tax_treatment, settings, custom_rate=None):
 
 def _tx_to_dict(t):
     """Serialize a Transaction to a dict."""
+    docs = Document.query.filter_by(entity_type='transaction', entity_id=t.id).all()
     d = {
         'id': t.id,
         'date': t.date.isoformat() if t.date else None,
@@ -85,7 +86,8 @@ def _tx_to_dict(t):
         'account_id': t.account_id,
         'account_name': t.account.name if t.account else None,
         'notes': t.notes,
-        'document_filename': t.document_filename,
+        'documents': [{'id': doc.id, 'filename': doc.filename, 'original_filename': doc.original_filename} for doc in docs],
+        'document_filename': t.document_filename,  # legacy field
         'created_at': t.created_at.isoformat() if t.created_at else None,
         'updated_at': t.updated_at.isoformat() if t.updated_at else None,
     }
@@ -678,10 +680,12 @@ def delete_transaction(tx_id):
     if t.linked_asset_id:
         return jsonify({'error': 'Cannot delete a transaction linked to an asset. Manage it via the asset.'}), 409
 
-    if t.document_filename:
-        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
+    # Remove all attached documents
+    for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
+        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
         if os.path.exists(fp):
             os.remove(fp)
+        db.session.delete(doc)
 
     db.session.delete(t)
     db.session.commit()
@@ -692,85 +696,106 @@ def delete_transaction(tx_id):
 # Transaction documents (upload / download / delete)
 # ---------------------------------------------------------------------------
 
-@api_bp.route('/transactions/<int:tx_id>/document', methods=['POST'])
+@api_bp.route('/transactions/<int:tx_id>/documents', methods=['POST'])
 @require_api_key
-def upload_transaction_document(tx_id):
+def upload_transaction_documents(tx_id):
     """
-    Upload or replace a document for a transaction.
-    Content-Type: multipart/form-data with a file field named 'document'.
-    Allowed types: pdf, png, jpg, jpeg, gif, webp. Max 16 MB.
+    Upload one or more documents to a transaction.
+    Content-Type: multipart/form-data with file field(s) named 'documents'.
+    Allowed types: pdf, png, jpg, jpeg, gif, webp. Max 16 MB total.
     """
     t = Transaction.query.get(tx_id)
     if not t:
         return jsonify({'error': f'Transaction {tx_id} not found'}), 404
 
-    if 'document' not in request.files:
-        return jsonify({'error': "No file provided. Send a file field named 'document'."}), 400
+    files = request.files.getlist('documents')
+    if not files or not any(f.filename for f in files):
+        return jsonify({'error': "No files provided. Send file(s) in field 'documents'."}), 400
 
-    file = request.files['document']
-    if not file or not file.filename:
-        return jsonify({'error': 'Empty file provided.'}), 400
+    created = []
+    errors = []
+    for i, file in enumerate(files):
+        if not file or not file.filename:
+            continue
+        if not _allowed_file(file.filename):
+            errors.append({'index': i, 'filename': file.filename,
+                           'error': f'File type not allowed. Allowed: {", ".join(sorted(ALLOWED_EXTENSIONS))}'})
+            continue
+        stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+        file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+        doc = Document(filename=stored, original_filename=file.filename,
+                       entity_type='transaction', entity_id=t.id)
+        db.session.add(doc)
+        db.session.flush()
+        created.append({'id': doc.id, 'filename': stored, 'original_filename': file.filename})
 
-    if not _allowed_file(file.filename):
-        return jsonify({
-            'error': f'File type not allowed. Allowed types: {", ".join(sorted(ALLOWED_EXTENSIONS))}'
-        }), 400
+    if not created and errors:
+        return jsonify({'errors': errors}), 400
 
-    # Remove old file if replacing
-    if t.document_filename:
-        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
-        if os.path.exists(old_path):
-            os.remove(old_path)
-
-    filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-    t.document_filename = filename
     db.session.commit()
-
     return jsonify({
         'transaction_id': t.id,
-        'document_filename': filename,
+        'documents': created,
+        'errors': errors,
     }), 201
 
 
-@api_bp.route('/transactions/<int:tx_id>/document', methods=['GET'])
+@api_bp.route('/transactions/<int:tx_id>/documents', methods=['GET'])
 @require_api_key
-def download_transaction_document(tx_id):
-    """Download the document attached to a transaction."""
+def list_transaction_documents(tx_id):
+    """List all documents attached to a transaction."""
     t = Transaction.query.get(tx_id)
     if not t:
         return jsonify({'error': f'Transaction {tx_id} not found'}), 404
 
-    if not t.document_filename:
-        return jsonify({'error': 'No document attached to this transaction.'}), 404
+    docs = Document.query.filter_by(entity_type='transaction', entity_id=t.id).all()
+    return jsonify({
+        'transaction_id': t.id,
+        'documents': [{'id': d.id, 'filename': d.filename, 'original_filename': d.original_filename,
+                        'created_at': d.created_at.isoformat() if d.created_at else None} for d in docs],
+    })
+
+
+@api_bp.route('/transactions/<int:tx_id>/documents/<int:doc_id>', methods=['GET'])
+@require_api_key
+def download_transaction_document(tx_id, doc_id):
+    """Download a specific document attached to a transaction."""
+    t = Transaction.query.get(tx_id)
+    if not t:
+        return jsonify({'error': f'Transaction {tx_id} not found'}), 404
+
+    doc = Document.query.get(doc_id)
+    if not doc or doc.entity_type != 'transaction' or doc.entity_id != t.id:
+        return jsonify({'error': f'Document {doc_id} not found for this transaction.'}), 404
 
     upload_folder = current_app.config['UPLOAD_FOLDER']
-    fp = os.path.join(upload_folder, t.document_filename)
+    fp = os.path.join(upload_folder, doc.filename)
     if not os.path.exists(fp):
         return jsonify({'error': 'Document file not found on disk.'}), 404
 
-    return send_from_directory(upload_folder, t.document_filename)
+    return send_from_directory(upload_folder, doc.filename)
 
 
-@api_bp.route('/transactions/<int:tx_id>/document', methods=['DELETE'])
+@api_bp.route('/transactions/<int:tx_id>/documents/<int:doc_id>', methods=['DELETE'])
 @require_api_key
-def delete_transaction_document(tx_id):
-    """Remove the document from a transaction (deletes the file on disk)."""
+def delete_transaction_document(tx_id, doc_id):
+    """Remove a specific document from a transaction (deletes the file on disk)."""
     t = Transaction.query.get(tx_id)
     if not t:
         return jsonify({'error': f'Transaction {tx_id} not found'}), 404
 
-    if not t.document_filename:
-        return jsonify({'error': 'No document attached to this transaction.'}), 404
+    doc = Document.query.get(doc_id)
+    if not doc or doc.entity_type != 'transaction' or doc.entity_id != t.id:
+        return jsonify({'error': f'Document {doc_id} not found for this transaction.'}), 404
 
-    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
+    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
     if os.path.exists(fp):
         os.remove(fp)
 
-    t.document_filename = None
+    db.session.delete(doc)
     db.session.commit()
 
-    return jsonify({'deleted': True, 'transaction_id': tx_id})
+    return jsonify({'deleted': True, 'document_id': doc_id, 'transaction_id': tx_id})
 
 
 # ---------------------------------------------------------------------------

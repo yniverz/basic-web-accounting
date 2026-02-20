@@ -3,7 +3,7 @@ from datetime import date, datetime
 from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app, send_from_directory
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account
+from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account, Document
 from werkzeug.security import generate_password_hash
 from helpers import parse_date, parse_amount, calculate_tax, calculate_tax_from_net, get_year_choices, get_month_names, format_currency, TAX_TREATMENT_LABELS, get_tax_rate_for_treatment
 from depreciation import (
@@ -164,14 +164,19 @@ def transaction_new():
                     t.net_amount = t.amount
                     t.tax_amount = 0.0
 
-            # File upload
-            file = request.files.get('document')
-            if file and file.filename and allowed_file(file.filename):
-                filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-                t.document_filename = filename
-
             db.session.add(t)
+            db.session.flush()  # get ID for document links
+
+            # File uploads (multiple)
+            files = request.files.getlist('documents')
+            for file in files:
+                if file and file.filename and allowed_file(file.filename):
+                    stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+                    doc = Document(filename=stored, original_filename=file.filename,
+                                   entity_type='transaction', entity_id=t.id)
+                    db.session.add(doc)
+
             db.session.commit()
             flash('Buchung wurde erstellt.', 'success')
             return redirect(url_for('admin.transactions'))
@@ -246,17 +251,25 @@ def transaction_edit(id):
                     t.net_amount = t.amount
                     t.tax_amount = 0.0
 
-            # File upload
-            file = request.files.get('document')
-            if file and file.filename and allowed_file(file.filename):
-                # Remove old file
-                if t.document_filename:
-                    old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
-                    if os.path.exists(old_path):
-                        os.remove(old_path)
-                filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-                t.document_filename = filename
+            # Handle document removals
+            remove_doc_ids = request.form.getlist('remove_documents')
+            for doc_id in remove_doc_ids:
+                doc = Document.query.get(int(doc_id))
+                if doc and doc.entity_type == 'transaction' and doc.entity_id == t.id:
+                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                    db.session.delete(doc)
+
+            # File uploads (multiple, appended)
+            files = request.files.getlist('documents')
+            for file in files:
+                if file and file.filename and allowed_file(file.filename):
+                    stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+                    doc = Document(filename=stored, original_filename=file.filename,
+                                   entity_type='transaction', entity_id=t.id)
+                    db.session.add(doc)
 
             db.session.commit()
             flash('Buchung wurde aktualisiert.', 'success')
@@ -283,10 +296,12 @@ def transaction_delete(id):
     if t.linked_asset_id:
         flash('Diese Buchung ist mit einem Anlagegut verknüpft und kann nicht direkt gelöscht werden.', 'error')
         return redirect(url_for('admin.transactions'))
-    if t.document_filename:
-        filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], t.document_filename)
-        if os.path.exists(filepath):
-            os.remove(filepath)
+    # Remove all attached documents
+    for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
+        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+        if os.path.exists(fp):
+            os.remove(fp)
+        db.session.delete(doc)
     db.session.delete(t)
     db.session.commit()
     flash('Buchung wurde gelöscht.', 'success')
@@ -638,12 +653,14 @@ def asset_new():
                 unit_net = net_val
                 unit_tax = tax_val
 
-            # File upload (shared document for all bundle items)
-            file = request.files.get('document')
-            doc_filename = None
-            if file and file.filename and allowed_file(file.filename):
-                doc_filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], doc_filename))
+            # File uploads (shared documents for all bundle items)
+            uploaded_docs = []
+            files = request.files.getlist('documents')
+            for file in files:
+                if file and file.filename and allowed_file(file.filename):
+                    stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+                    uploaded_docs.append((stored, file.filename))
 
             created_ids = []
             for i in range(quantity):
@@ -663,11 +680,16 @@ def asset_new():
                     salvage_value=parse_amount(request.form.get('salvage_value', '0')),
                     depreciation_category_id=request.form.get('depreciation_category_id', type=int) or None,
                     notes=request.form.get('notes', '').strip() or None,
-                    document_filename=doc_filename,
                 )
                 db.session.add(asset)
                 db.session.flush()
                 created_ids.append(asset.id)
+
+                # Attach uploaded documents to each asset
+                for stored_name, orig_name in uploaded_docs:
+                    doc = Document(filename=stored_name, original_filename=orig_name,
+                                   entity_type='asset', entity_id=asset.id)
+                    db.session.add(doc)
 
             # Optional: Create linked cash outflow transaction
             book_outflow = request.form.get('book_outflow') == '1'
@@ -909,16 +931,25 @@ def asset_edit(id):
             asset.depreciation_category_id = request.form.get('depreciation_category_id', type=int) or None
             asset.notes = request.form.get('notes', '').strip() or None
 
-            # File upload
-            file = request.files.get('document')
-            if file and file.filename and allowed_file(file.filename):
-                if asset.document_filename:
-                    old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], asset.document_filename)
-                    if os.path.exists(old_path):
-                        os.remove(old_path)
-                filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-                asset.document_filename = filename
+            # Handle document removals
+            remove_doc_ids = request.form.getlist('remove_documents')
+            for doc_id in remove_doc_ids:
+                doc = Document.query.get(int(doc_id))
+                if doc and doc.entity_type == 'asset' and doc.entity_id == asset.id:
+                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                    db.session.delete(doc)
+
+            # File uploads (multiple, appended)
+            files = request.files.getlist('documents')
+            for file in files:
+                if file and file.filename and allowed_file(file.filename):
+                    stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+                    doc = Document(filename=stored, original_filename=file.filename,
+                                   entity_type='asset', entity_id=asset.id)
+                    db.session.add(doc)
 
             db.session.commit()
             flash('Anlagegut wurde aktualisiert.', 'success')
@@ -1043,10 +1074,12 @@ def asset_delete(id):
     asset = Asset.query.get_or_404(id)
     # Delete linked transactions
     Transaction.query.filter_by(linked_asset_id=id).delete()
-    if asset.document_filename:
-        filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], asset.document_filename)
-        if os.path.exists(filepath):
-            os.remove(filepath)
+    # Remove all attached documents
+    for doc in Document.query.filter_by(entity_type='asset', entity_id=asset.id).all():
+        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+        if os.path.exists(fp):
+            os.remove(fp)
+        db.session.delete(doc)
     db.session.delete(asset)
     db.session.commit()
     flash('Anlagegut wurde gelöscht.', 'success')
@@ -1447,9 +1480,10 @@ def bundle_edit(bundle_id):
                 # Sort active items by id desc so we remove the last ones first
                 removable = sorted(active_items, key=lambda a: a.id, reverse=True)
                 for a in removable[:to_remove]:
-                    if a.document_filename:
-                        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
-                        # Don't remove shared files yet, handled below
+                    # Remove documents attached to this asset
+                    for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
+                        # Don't remove shared files yet, other items may reference them
+                        db.session.delete(doc)
                     db.session.delete(a)
                     items.remove(a)
             elif new_quantity > old_count:
@@ -1466,11 +1500,18 @@ def bundle_edit(bundle_id):
                         useful_life_months=representative.useful_life_months,
                         salvage_value=representative.salvage_value or 0,
                         depreciation_category_id=representative.depreciation_category_id,
-                        document_filename=representative.document_filename,
                     )
                     db.session.add(new_asset)
                     items.append(new_asset)
                 db.session.flush()  # assign IDs to new items
+
+                # Copy documents from representative to new items
+                rep_docs = Document.query.filter_by(entity_type='asset', entity_id=representative.id).all()
+                for new_asset in items[-( new_quantity - old_count):]:
+                    for rd in rep_docs:
+                        doc = Document(filename=rd.filename, original_filename=rd.original_filename,
+                                       entity_type='asset', entity_id=new_asset.id)
+                        db.session.add(doc)
 
             count = new_quantity
             unit_gross = round(total_gross / count, 2)
@@ -1483,12 +1524,34 @@ def bundle_edit(bundle_id):
             depreciation_category_id = request.form.get('depreciation_category_id', type=int) or None
             notes = request.form.get('notes', '').strip() or None
 
-            # File upload (shared for all)
-            file = request.files.get('document')
-            new_filename = None
-            if file and file.filename and allowed_file(file.filename):
-                new_filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-                file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], new_filename))
+            # Handle document removals for all bundle items
+            remove_doc_ids = request.form.getlist('remove_documents')
+            if remove_doc_ids:
+                # Get the filenames to remove
+                filenames_to_remove = set()
+                for doc_id in remove_doc_ids:
+                    doc = Document.query.get(int(doc_id))
+                    if doc and doc.entity_type == 'asset':
+                        filenames_to_remove.add(doc.filename)
+                # Remove matching documents from ALL items in the bundle
+                for a in items:
+                    for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
+                        if doc.filename in filenames_to_remove:
+                            db.session.delete(doc)
+                # Remove the actual files from disk
+                for fn in filenames_to_remove:
+                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], fn)
+                    if os.path.exists(fp):
+                        os.remove(fp)
+
+            # File uploads (multiple, shared for all bundle items)
+            uploaded_docs = []
+            files = request.files.getlist('documents')
+            for file in files:
+                if file and file.filename and allowed_file(file.filename):
+                    stored = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
+                    file.save(os.path.join(current_app.config['UPLOAD_FOLDER'], stored))
+                    uploaded_docs.append((stored, file.filename))
 
             # Sort items by id for consistent numbering
             items.sort(key=lambda a: a.id)
@@ -1506,13 +1569,11 @@ def bundle_edit(bundle_id):
                 a.salvage_value = salvage_value
                 a.depreciation_category_id = depreciation_category_id
                 a.notes = notes
-                if new_filename:
-                    # Remove old file if different
-                    if a.document_filename and a.document_filename != new_filename:
-                        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
-                        if os.path.exists(old_path):
-                            os.remove(old_path)
-                    a.document_filename = new_filename
+                # Attach new documents to each item
+                for stored_name, orig_name in uploaded_docs:
+                    doc = Document(filename=stored_name, original_filename=orig_name,
+                                   entity_type='asset', entity_id=a.id)
+                    db.session.add(doc)
 
             db.session.commit()
             qty_info = ''
@@ -1558,16 +1619,18 @@ def bundle_delete(bundle_id):
     base_name = items[0].name.rsplit(' (', 1)[0] if '(' in items[0].name else items[0].name
     count = len(items)
 
-    # Remove shared document file(s)
+    # Remove all documents and files for the bundle
     removed_files = set()
     for a in items:
         # Delete linked transactions
         Transaction.query.filter_by(linked_asset_id=a.id).delete()
-        if a.document_filename and a.document_filename not in removed_files:
-            filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], a.document_filename)
-            if os.path.exists(filepath):
-                os.remove(filepath)
-            removed_files.add(a.document_filename)
+        for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
+            if doc.filename not in removed_files:
+                filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                removed_files.add(doc.filename)
+            db.session.delete(doc)
         db.session.delete(a)
 
     db.session.commit()
