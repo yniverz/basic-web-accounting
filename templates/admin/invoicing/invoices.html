@@ -91,7 +91,7 @@
                     <td style="text-align: right;">{{ inv.total|currency }}</td>
                     <td>
                         {% if inv.document_filename %}
-                        <a href="{{ url_for('invoicing.invoice_download', id=inv.id) }}" class="text-accent">📄</a>
+                        <a href="{{ url_for('invoicing.invoice_download', id=inv.id) }}" class="text-accent" target="_blank">📄</a>
                         {% else %}
                         <span class="text-muted">–</span>
                         {% endif %}

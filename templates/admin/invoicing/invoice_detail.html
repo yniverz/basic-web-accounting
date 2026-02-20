@@ -145,7 +145,7 @@
             </button>
         </form>
         {% if invoice.document_filename %}
-        <a href="{{ url_for('invoicing.invoice_download', id=invoice.id) }}" class="btn btn-outline">⬇ PDF herunterladen</a>
+        <a href="{{ url_for('invoicing.invoice_download', id=invoice.id) }}" class="btn btn-outline" target="_blank">⬇ PDF herunterladen</a>
         {% endif %}
     </div>
 </div>

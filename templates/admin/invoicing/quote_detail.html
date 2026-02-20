@@ -141,7 +141,7 @@
             </button>
         </form>
         {% if quote.document_filename %}
-        <a href="{{ url_for('invoicing.quote_download', id=quote.id) }}" class="btn btn-outline">⬇ PDF herunterladen</a>
+        <a href="{{ url_for('invoicing.quote_download', id=quote.id) }}" class="btn btn-outline" target="_blank">⬇ PDF herunterladen</a>
         {% endif %}
     </div>
 

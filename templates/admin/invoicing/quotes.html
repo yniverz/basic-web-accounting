@@ -76,7 +76,7 @@
                     <td style="text-align: right;">{{ q.total|currency }}</td>
                     <td>
                         {% if q.document_filename %}
-                        <a href="{{ url_for('invoicing.quote_download', id=q.id) }}" class="text-accent">📄</a>
+                        <a href="{{ url_for('invoicing.quote_download', id=q.id) }}" class="text-accent" target="_blank">📄</a>
                         {% else %}
                         <span class="text-muted">–</span>
                         {% endif %}
