@@ -79,6 +79,7 @@ def create_app():
             fav_mime = FAVICON_MIMETYPES.get(ext, 'image/x-icon')
         return {
             'site_settings': settings,
+            'brand_name': settings.display_name or settings.business_name or 'Buchhaltung',
             'has_favicon': has_fav,
             'favicon_mimetype': fav_mime,
         }
@@ -205,6 +206,7 @@ def _migrate_schema(db):
         ('transactions', 'account_id', 'INTEGER'),
         ('transactions', 'transfer_to_account_id', 'INTEGER'),
         ('transactions', 'linked_asset_id', 'INTEGER'),
+        ('site_settings', 'display_name', 'VARCHAR(200)'),
         ('site_settings', 'logo_filename', 'VARCHAR(200)'),
         ('site_settings', 'default_agb_text', 'TEXT'),
         ('site_settings', 'default_payment_terms_days', 'INTEGER DEFAULT 14'),

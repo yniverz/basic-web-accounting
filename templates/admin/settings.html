@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}
-{% block title %}Einstellungen - {{ site_settings.business_name }}{% endblock %}
+{% block title %}Einstellungen - {{ brand_name }}{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -10,9 +10,18 @@
     <div class="card-header">Unternehmensdaten</div>
     <form method="POST" enctype="multipart/form-data">
         <div class="form-group">
+            <label for="display_name">Anzeigename / Markenname</label>
+            <input type="text" id="display_name" name="display_name"
+                   value="{{ settings.display_name or '' }}"
+                   placeholder="{{ settings.business_name }}">
+            <small class="help-text">Wird auf der Website (Titel, Navigation) angezeigt. Leer = Firmenname wird verwendet.</small>
+        </div>
+
+        <div class="form-group">
             <label for="business_name">Firmenname</label>
             <input type="text" id="business_name" name="business_name"
                    value="{{ settings.business_name }}" required>
+            <small class="help-text">Wird auf PDFs (Angebote, Rechnungen) verwendet.</small>
         </div>
 
         <div class="form-row">

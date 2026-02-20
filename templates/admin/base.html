@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
-    <title>{% block title %}{{ site_settings.business_name or 'Buchhaltung' }}{% endblock %}</title>
+    <title>{% block title %}{{ brand_name }}{% endblock %}</title>
     {% if has_favicon %}
     <link rel="icon" href="/favicon.ico" type="{{ favicon_mimetype }}">
     {% endif %}
@@ -21,7 +21,7 @@
 <body>
     <nav>
         <div class="nav-inner">
-            <a href="{{ url_for('admin.dashboard') }}" class="nav-brand">{{ site_settings.business_name or 'Firmen' }} Buchhaltung</a>
+            <a href="{{ url_for('admin.dashboard') }}" class="nav-brand">{{ brand_name }}</a>
             <button class="hamburger" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menü">☰</button>
             <div class="nav-links">
                 <a href="{{ url_for('admin.dashboard') }}" class="{{ 'active' if request.endpoint == 'admin.dashboard' }}">Dashboard</a>

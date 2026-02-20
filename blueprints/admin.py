@@ -1807,6 +1807,7 @@ def settings():
     settings = SiteSettings.get_settings()
 
     if request.method == 'POST':
+        settings.display_name = request.form.get('display_name', '').strip() or None
         settings.business_name = request.form.get('business_name', '').strip() or 'Meine Buchhaltung'
         settings.address_lines = request.form.get('address_lines', '').strip() or None
         settings.contact_lines = request.form.get('contact_lines', '').strip() or None

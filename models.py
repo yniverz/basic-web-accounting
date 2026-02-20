@@ -25,6 +25,7 @@ class SiteSettings(db.Model):
     __tablename__ = 'site_settings'
 
     id = db.Column(db.Integer, primary_key=True)
+    display_name = db.Column(db.String(200), nullable=True)  # Brand name for website UI
     business_name = db.Column(db.String(200), default='Meine Buchhaltung')
     address_lines = db.Column(db.Text, nullable=True)
     contact_lines = db.Column(db.Text, nullable=True)

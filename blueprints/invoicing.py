@@ -331,7 +331,7 @@ def quote_download(id):
     if not os.path.exists(filepath):
         flash('PDF-Datei nicht gefunden.', 'danger')
         return redirect(url_for('invoicing.quote_detail', id=quote.id))
-    return send_file(filepath, as_attachment=True,
+    return send_file(filepath, as_attachment=False,
                      download_name=f'Angebot_{quote.quote_number}.pdf')
 
 
@@ -584,7 +584,7 @@ def invoice_download(id):
     if not os.path.exists(filepath):
         flash('PDF-Datei nicht gefunden.', 'danger')
         return redirect(url_for('invoicing.invoice_detail', id=invoice.id))
-    return send_file(filepath, as_attachment=True,
+    return send_file(filepath, as_attachment=False,
                      download_name=f'Rechnung_{invoice.invoice_number}.pdf')
 
 
