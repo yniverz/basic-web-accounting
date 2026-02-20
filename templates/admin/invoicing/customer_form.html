@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'Kunde bearbeiten' if customer else 'Neuer Kunde' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'Kunde bearbeiten' if customer else 'Neuer Kunde' }}</h1>
+    <a href="{{ url_for('invoicing.customers') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Name *</label>
+                <input type="text" id="name" name="name" required
+                       value="{{ customer.name if customer else '' }}"
+                       placeholder="Vor- und Nachname oder Ansprechpartner">
+            </div>
+            <div class="form-group">
+                <label for="company">Firma</label>
+                <input type="text" id="company" name="company"
+                       value="{{ customer.company if customer else '' }}"
+                       placeholder="Firmenname (optional)">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="address">Adresse</label>
+            <textarea id="address" name="address" rows="3"
+                      placeholder="Straße Nr.&#10;PLZ Ort&#10;Land">{{ customer.address if customer else '' }}</textarea>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="email">E-Mail</label>
+                <input type="email" id="email" name="email"
+                       value="{{ customer.email if customer else '' }}"
+                       placeholder="kunde@beispiel.de">
+            </div>
+            <div class="form-group">
+                <label for="phone">Telefon</label>
+                <input type="text" id="phone" name="phone"
+                       value="{{ customer.phone if customer else '' }}"
+                       placeholder="+49 ...">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="notes">Notizen</label>
+            <textarea id="notes" name="notes" rows="2"
+                      placeholder="Interne Notizen zum Kunden">{{ customer.notes if customer else '' }}</textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary">{{ 'Speichern' if customer else 'Kunde anlegen' }}</button>
+    </form>
+</div>
+{% endblock %}

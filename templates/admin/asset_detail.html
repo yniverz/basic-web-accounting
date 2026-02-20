@@ -9,6 +9,7 @@
         {% if not asset.disposal_date %}
         <a href="{{ url_for('admin.asset_dispose', id=asset.id) }}" class="btn btn-warning">Abgang erfassen</a>
         {% endif %}
+        <a href="{{ url_for('invoicing.quote_new', asset_id=asset.id) }}" class="btn btn-outline">Angebot erstellen</a>
         <a href="{{ url_for('admin.assets') }}" class="btn btn-outline">← Zurück</a>
     </div>
 </div>
@@ -204,7 +205,46 @@
               onsubmit="return confirm('Abgang wirklich rückgängig machen?')">
             <button type="submit" class="btn btn-sm btn-outline">Abgang rückgängig machen</button>
         </form>
+        {% if asset.disposal_reason == 'sold' and asset.disposal_price_gross and asset.disposal_price_gross > 0 %}
+        <a href="{{ url_for('invoicing.quote_new', asset_id=asset.id) }}" class="btn btn-sm btn-primary">Angebot erstellen</a>
+        {% endif %}
     </div>
+</div>
+{% endif %}
+
+<!-- Linked Quotes / Invoices -->
+{% set asset_quotes = asset.quotes.all() %}
+{% set asset_invoices = asset.invoices.all() %}
+{% if asset_quotes or asset_invoices %}
+<div class="card">
+    <div class="card-header">Verknüpfte Angebote & Rechnungen</div>
+    {% if asset_quotes %}
+    <div class="text-muted text-sm mb-8"><strong>Angebote</strong></div>
+    {% for q in asset_quotes %}
+    <div class="d-flex justify-between align-center mb-8">
+        <a href="{{ url_for('invoicing.quote_detail', id=q.id) }}" class="text-accent">
+            {{ q.quote_number }} – {{ q.date|date_format }}
+        </a>
+        <span class="badge {% if q.status == 'accepted' %}badge-success{% elif q.status == 'invoiced' %}badge-info{% elif q.status == 'rejected' %}badge-danger{% else %}badge-muted{% endif %}">
+            {{ q.status|capitalize }}
+        </span>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if asset_invoices %}
+    {% if asset_quotes %}<hr class="section-divider">{% endif %}
+    <div class="text-muted text-sm mb-8"><strong>Rechnungen</strong></div>
+    {% for inv in asset_invoices %}
+    <div class="d-flex justify-between align-center mb-8">
+        <a href="{{ url_for('invoicing.invoice_detail', id=inv.id) }}" class="text-accent">
+            {{ inv.invoice_number }} – {{ inv.date|date_format }} – {{ inv.total|currency }}
+        </a>
+        <span class="badge {% if inv.status == 'paid' %}badge-success{% elif inv.status == 'cancelled' %}badge-danger{% else %}badge-muted{% endif %}">
+            {{ inv.status|capitalize }}
+        </span>
+    </div>
+    {% endfor %}
+    {% endif %}
 </div>
 {% endif %}
 

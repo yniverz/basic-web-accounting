@@ -152,9 +152,17 @@
                     {% endif %}
                     <td>
                         {% set t_docs = get_documents('transaction', t.id) %}
-                        {% if t_docs %}
+                        {% if t.linked_asset_id %}
+                            {% set a_docs = get_documents('asset', t.linked_asset_id) %}
+                        {% else %}
+                            {% set a_docs = [] %}
+                        {% endif %}
+                        {% if t_docs or a_docs %}
                         {% for doc in t_docs %}
                         <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent text-sm" title="{{ doc.original_filename or doc.filename }}">📎</a>
+                        {% endfor %}
+                        {% for doc in a_docs %}
+                        <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent text-sm" title="{{ doc.original_filename or doc.filename }} (Anlagegut)">📄</a>
                         {% endfor %}
                         {% else %}
                         <span class="text-muted text-sm">–</span>

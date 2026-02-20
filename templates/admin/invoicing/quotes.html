@@ -1,0 +1,101 @@
+{% extends "admin/base.html" %}
+{% block title %}Angebote - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Angebote</h1>
+    <a href="{{ url_for('invoicing.quote_new') }}" class="btn btn-primary">+ Neues Angebot</a>
+</div>
+
+<!-- Filters -->
+<div class="filter-bar">
+    <form method="GET" class="d-flex gap-12 align-end flex-wrap w-full">
+        <div class="form-group">
+            <label for="year">Jahr</label>
+            <select name="year" id="year" style="width: auto;">
+                {% for y in years %}
+                <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="status">Status</label>
+            <select name="status" id="status" style="width: auto;">
+                <option value="">Alle</option>
+                <option value="draft" {{ 'selected' if status_filter == 'draft' }}>Entwurf</option>
+                <option value="sent" {{ 'selected' if status_filter == 'sent' }}>Versendet</option>
+                <option value="accepted" {{ 'selected' if status_filter == 'accepted' }}>Angenommen</option>
+                <option value="rejected" {{ 'selected' if status_filter == 'rejected' }}>Abgelehnt</option>
+                <option value="invoiced" {{ 'selected' if status_filter == 'invoiced' }}>Rechnung erstellt</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn">Filtern</button>
+        </div>
+    </form>
+</div>
+
+{% if quotes %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nr.</th>
+                    <th>Datum</th>
+                    <th>Kunde</th>
+                    <th>Status</th>
+                    <th style="text-align: right;">Betrag</th>
+                    <th>PDF</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in quotes %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('invoicing.quote_detail', id=q.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
+                            {{ q.quote_number }}
+                        </a>
+                    </td>
+                    <td>{{ q.date|date_format }}</td>
+                    <td>{{ q.customer.display_name if q.customer else '–' }}</td>
+                    <td>
+                        {% if q.status == 'draft' %}
+                        <span class="badge badge-muted">Entwurf</span>
+                        {% elif q.status == 'sent' %}
+                        <span class="badge badge-info">Versendet</span>
+                        {% elif q.status == 'accepted' %}
+                        <span class="badge badge-success">Angenommen</span>
+                        {% elif q.status == 'rejected' %}
+                        <span class="badge badge-danger">Abgelehnt</span>
+                        {% elif q.status == 'invoiced' %}
+                        <span class="badge badge-warning">Rechnung erstellt</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right;">{{ q.total|currency }}</td>
+                    <td>
+                        {% if q.document_filename %}
+                        <a href="{{ url_for('invoicing.quote_download', id=q.id) }}" class="text-accent">📄</a>
+                        {% else %}
+                        <span class="text-muted">–</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('invoicing.quote_detail', id=q.id) }}" class="btn btn-sm btn-outline">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <p>Keine Angebote gefunden.</p>
+        <a href="{{ url_for('invoicing.quote_new') }}" class="btn btn-primary">+ Erstes Angebot erstellen</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

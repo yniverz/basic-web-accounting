@@ -1,0 +1,116 @@
+{% extends "admin/base.html" %}
+{% block title %}Rechnungen - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Rechnungen</h1>
+    <a href="{{ url_for('invoicing.invoice_new') }}" class="btn btn-primary">+ Neue Rechnung</a>
+</div>
+
+<!-- Filters -->
+<div class="filter-bar">
+    <form method="GET" class="d-flex gap-12 align-end flex-wrap w-full">
+        <div class="form-group">
+            <label for="year">Jahr</label>
+            <select name="year" id="year" style="width: auto;">
+                {% for y in years %}
+                <option value="{{ y }}" {{ 'selected' if y == year }}>{{ y }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="status">Status</label>
+            <select name="status" id="status" style="width: auto;">
+                <option value="">Alle</option>
+                <option value="draft" {{ 'selected' if status_filter == 'draft' }}>Entwurf</option>
+                <option value="sent" {{ 'selected' if status_filter == 'sent' }}>Versendet</option>
+                <option value="paid" {{ 'selected' if status_filter == 'paid' }}>Bezahlt</option>
+                <option value="cancelled" {{ 'selected' if status_filter == 'cancelled' }}>Storniert</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn">Filtern</button>
+        </div>
+    </form>
+</div>
+
+<!-- Summary -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Gesamt</div>
+        <div class="stat-value">{{ total_amount|currency }}</div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Bezahlt</div>
+        <div class="stat-value text-success">{{ paid_amount|currency }}</div>
+    </div>
+    <div class="stat-card stat-warning">
+        <div class="stat-label">Offen</div>
+        <div class="stat-value">{{ open_amount|currency }}</div>
+    </div>
+</div>
+
+{% if invoices %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Nr.</th>
+                    <th>Datum</th>
+                    <th>Fällig</th>
+                    <th>Kunde</th>
+                    <th>Status</th>
+                    <th style="text-align: right;">Betrag</th>
+                    <th>PDF</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inv in invoices %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('invoicing.invoice_detail', id=inv.id) }}" class="font-semibold text-accent" style="text-decoration: none;">
+                            {{ inv.invoice_number }}
+                        </a>
+                    </td>
+                    <td>{{ inv.date|date_format }}</td>
+                    <td>{{ inv.due_date|date_format if inv.due_date else '–' }}</td>
+                    <td>{{ inv.customer.display_name if inv.customer else '–' }}</td>
+                    <td>
+                        {% if inv.status == 'draft' %}
+                        <span class="badge badge-muted">Entwurf</span>
+                        {% elif inv.status == 'sent' %}
+                        <span class="badge badge-info">Versendet</span>
+                        {% elif inv.status == 'paid' %}
+                        <span class="badge badge-success">Bezahlt</span>
+                        {% elif inv.status == 'cancelled' %}
+                        <span class="badge badge-danger">Storniert</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right;">{{ inv.total|currency }}</td>
+                    <td>
+                        {% if inv.document_filename %}
+                        <a href="{{ url_for('invoicing.invoice_download', id=inv.id) }}" class="text-accent">📄</a>
+                        {% else %}
+                        <span class="text-muted">–</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <a href="{{ url_for('invoicing.invoice_detail', id=inv.id) }}" class="btn btn-sm btn-outline">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <p>Keine Rechnungen gefunden.</p>
+        <a href="{{ url_for('invoicing.invoice_new') }}" class="btn btn-primary">+ Erste Rechnung erstellen</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

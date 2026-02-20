@@ -35,6 +35,11 @@ class SiteSettings(db.Model):
     tax_rate = db.Column(db.Float, default=19.0)  # Regelsteuersatz
     tax_rate_reduced = db.Column(db.Float, default=7.0)  # Ermäßigter Steuersatz
     favicon_filename = db.Column(db.String(200), nullable=True)
+    logo_filename = db.Column(db.String(200), nullable=True)  # Logo for PDFs
+    default_agb_text = db.Column(db.Text, nullable=True)  # Default AGB for quotes
+    default_payment_terms_days = db.Column(db.Integer, default=14)
+    quote_number_prefix = db.Column(db.String(20), default='A')
+    invoice_number_prefix = db.Column(db.String(20), default='R')
 
     @staticmethod
     def get_settings():
@@ -228,6 +233,200 @@ class DepreciationCategory(db.Model):
 
     def __repr__(self):
         return f'<DepreciationCategory {self.name} ({self.useful_life_months}m)>'
+
+
+class Customer(db.Model):
+    """A customer / client for quotes and invoices."""
+    __tablename__ = 'customers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    company = db.Column(db.String(200), nullable=True)
+    address = db.Column(db.Text, nullable=True)
+    email = db.Column(db.String(200), nullable=True)
+    phone = db.Column(db.String(100), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<Customer {self.name}>'
+
+    @property
+    def display_name(self):
+        if self.company:
+            return f'{self.company} ({self.name})'
+        return self.name
+
+    @property
+    def recipient_lines(self):
+        """Build recipient address lines for PDF generation."""
+        lines = []
+        if self.company:
+            lines.append(self.company)
+        lines.append(self.name)
+        if self.address:
+            lines.extend([l.strip() for l in self.address.strip().split('\n') if l.strip()])
+        return lines
+
+
+class Quote(db.Model):
+    """An offer / quote (Angebot) for a customer."""
+    __tablename__ = 'quotes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    quote_number = db.Column(db.String(50), unique=True, nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=True)
+    date = db.Column(db.Date, nullable=False, default=date.today)
+    valid_until = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), default='draft')
+    # Status: draft, sent, accepted, rejected, invoiced
+
+    # Tax
+    tax_treatment = db.Column(db.String(30), default='standard')
+    tax_rate = db.Column(db.Float, nullable=True)
+
+    # Content
+    discount_percent = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text, nullable=True)
+    agb_text = db.Column(db.Text, nullable=True)
+    payment_terms_days = db.Column(db.Integer, default=14)
+
+    # Links
+    linked_asset_id = db.Column(db.Integer, db.ForeignKey('assets.id'), nullable=True)
+
+    # Generated PDF stored in uploads
+    document_filename = db.Column(db.String(300), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship('Customer', backref=db.backref('quotes', lazy='dynamic'))
+    linked_asset = db.relationship('Asset', backref=db.backref('quotes', lazy='dynamic'),
+                                   foreign_keys=[linked_asset_id])
+    items = db.relationship('QuoteItem', backref='quote', cascade='all, delete-orphan',
+                            order_by='QuoteItem.position', lazy='select')
+
+    @property
+    def subtotal(self):
+        """Gross subtotal before discount."""
+        return sum(item.total for item in self.items)
+
+    @property
+    def discount_amount(self):
+        if self.discount_percent and self.discount_percent > 0:
+            return round(self.subtotal * self.discount_percent / 100, 2)
+        return 0
+
+    @property
+    def total(self):
+        """Gross total after discount."""
+        return round(self.subtotal - self.discount_amount, 2)
+
+    def __repr__(self):
+        return f'<Quote {self.quote_number}>'
+
+
+class QuoteItem(db.Model):
+    """A line item in a quote."""
+    __tablename__ = 'quote_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    quote_id = db.Column(db.Integer, db.ForeignKey('quotes.id'), nullable=False)
+    position = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    quantity = db.Column(db.Float, default=1)
+    unit = db.Column(db.String(50), default='Stk.')
+    unit_price = db.Column(db.Float, nullable=False)  # Gross price per unit
+
+    @property
+    def total(self):
+        return round(self.quantity * self.unit_price, 2)
+
+    def __repr__(self):
+        return f'<QuoteItem {self.position}: {self.description}>'
+
+
+class Invoice(db.Model):
+    """An invoice (Rechnung) for a customer."""
+    __tablename__ = 'invoices'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_number = db.Column(db.String(50), unique=True, nullable=False)
+    quote_id = db.Column(db.Integer, db.ForeignKey('quotes.id'), nullable=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('customers.id'), nullable=False)
+    date = db.Column(db.Date, nullable=False, default=date.today)
+    due_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), default='draft')
+    # Status: draft, sent, paid, cancelled
+
+    # Tax
+    tax_treatment = db.Column(db.String(30), default='standard')
+    tax_rate = db.Column(db.Float, nullable=True)
+
+    # Content
+    discount_percent = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text, nullable=True)
+    payment_terms_days = db.Column(db.Integer, default=14)
+
+    # Links
+    linked_asset_id = db.Column(db.Integer, db.ForeignKey('assets.id'), nullable=True)
+    linked_transaction_id = db.Column(db.Integer, db.ForeignKey('transactions.id'), nullable=True)
+
+    # Generated PDF stored in uploads
+    document_filename = db.Column(db.String(300), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    customer = db.relationship('Customer', backref=db.backref('invoices', lazy='dynamic'))
+    quote = db.relationship('Quote', backref=db.backref('invoices', lazy='dynamic'))
+    linked_asset = db.relationship('Asset', backref=db.backref('invoices', lazy='dynamic'),
+                                   foreign_keys=[linked_asset_id])
+    linked_transaction = db.relationship('Transaction',
+                                         backref=db.backref('linked_invoice', uselist=False),
+                                         foreign_keys=[linked_transaction_id])
+    items = db.relationship('InvoiceItem', backref='invoice', cascade='all, delete-orphan',
+                            order_by='InvoiceItem.position', lazy='select')
+
+    @property
+    def subtotal(self):
+        """Gross subtotal before discount."""
+        return sum(item.total for item in self.items)
+
+    @property
+    def discount_amount(self):
+        if self.discount_percent and self.discount_percent > 0:
+            return round(self.subtotal * self.discount_percent / 100, 2)
+        return 0
+
+    @property
+    def total(self):
+        """Gross total after discount."""
+        return round(self.subtotal - self.discount_amount, 2)
+
+    def __repr__(self):
+        return f'<Invoice {self.invoice_number}>'
+
+
+class InvoiceItem(db.Model):
+    """A line item in an invoice."""
+    __tablename__ = 'invoice_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'), nullable=False)
+    position = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(500), nullable=False)
+    quantity = db.Column(db.Float, default=1)
+    unit = db.Column(db.String(50), default='Stk.')
+    unit_price = db.Column(db.Float, nullable=False)  # Gross price per unit
+
+    @property
+    def total(self):
+        return round(self.quantity * self.unit_price, 2)
+
+    def __repr__(self):
+        return f'<InvoiceItem {self.position}: {self.description}>'
 
 
 class ChatHistory(db.Model):

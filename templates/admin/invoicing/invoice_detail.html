@@ -1,0 +1,252 @@
+{% extends "admin/base.html" %}
+{% block title %}Rechnung {{ invoice.invoice_number }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Rechnung {{ invoice.invoice_number }}</h1>
+    <div class="d-flex gap-10">
+        {% if invoice.status != 'paid' %}
+        <a href="{{ url_for('invoicing.invoice_edit', id=invoice.id) }}" class="btn btn-outline">Bearbeiten</a>
+        {% endif %}
+        <a href="{{ url_for('invoicing.invoices') }}" class="btn btn-outline">← Zurück</a>
+    </div>
+</div>
+
+<!-- Status + Summary -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value text-sm" style="font-size: 1.1em;">
+            {% if invoice.status == 'draft' %}
+            <span class="badge badge-muted">Entwurf</span>
+            {% elif invoice.status == 'sent' %}
+            <span class="badge badge-info">Versendet</span>
+            {% elif invoice.status == 'paid' %}
+            <span class="badge badge-success">Bezahlt</span>
+            {% elif invoice.status == 'cancelled' %}
+            <span class="badge badge-danger">Storniert</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Rechnungsbetrag</div>
+        <div class="stat-value">{{ invoice.total|currency }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Fällig am</div>
+        <div class="stat-value text-sm" style="font-size: 1.1em;">{{ invoice.due_date|date_format if invoice.due_date else '–' }}</div>
+    </div>
+</div>
+
+<!-- Customer & Meta -->
+<div class="card">
+    <div class="card-header">Details</div>
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Kunde</div>
+            <div class="font-semibold">{{ invoice.customer.display_name if invoice.customer else '– Kein Kunde –' }}</div>
+            {% if invoice.customer and invoice.customer.address %}
+            <div class="text-sm text-muted mt-4" style="white-space: pre-line;">{{ invoice.customer.address }}</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Rechnungsdatum</div>
+            <div>{{ invoice.date|date_format }}</div>
+        </div>
+    </div>
+    {% if invoice.quote %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Aus Angebot</div>
+        <div><a href="{{ url_for('invoicing.quote_detail', id=invoice.quote.id) }}" class="text-accent font-semibold">{{ invoice.quote.quote_number }}</a></div>
+    </div>
+    {% endif %}
+    {% if settings.tax_mode == 'regular' %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Steuerbehandlung</div>
+            <div>{{ tax_treatment_labels.get(invoice.tax_treatment, invoice.tax_treatment) }}
+                {% if invoice.tax_rate %} ({{ invoice.tax_rate }}%){% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Zahlungsziel</div>
+            <div>{{ invoice.payment_terms_days or 14 }} Tage</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if invoice.linked_asset %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Verknüpftes Anlagegut</div>
+        <div><a href="{{ url_for('admin.asset_detail', id=invoice.linked_asset.id) }}" class="text-accent">{{ invoice.linked_asset.name }}</a></div>
+    </div>
+    {% endif %}
+    {% if invoice.notes %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Bemerkungen</div>
+        <div style="white-space: pre-line;">{{ invoice.notes }}</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Positions -->
+<div class="card">
+    <div class="card-header">Positionen</div>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 40px;">Pos</th>
+                    <th>Bezeichnung</th>
+                    <th style="text-align: right;">Menge</th>
+                    <th>Einheit</th>
+                    <th style="text-align: right;">Einzelpreis</th>
+                    <th style="text-align: right;">Gesamt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in invoice.items %}
+                <tr>
+                    <td>{{ item.position }}</td>
+                    <td>{{ item.description }}</td>
+                    <td style="text-align: right;">{{ item.quantity }}</td>
+                    <td>{{ item.unit }}</td>
+                    <td style="text-align: right;">{{ item.unit_price|currency }}</td>
+                    <td style="text-align: right;">{{ item.total|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="price-summary mt-16">
+        {% if invoice.discount_percent and invoice.discount_percent > 0 %}
+        <div class="price-row">
+            <span>Zwischensumme</span>
+            <span>{{ invoice.subtotal|currency }}</span>
+        </div>
+        <div class="price-row">
+            <span>Rabatt ({{ invoice.discount_percent }}%)</span>
+            <span>– {{ invoice.discount_amount|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="price-row total">
+            <span>Rechnungsbetrag</span>
+            <span>{{ invoice.total|currency }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- PDF & Actions -->
+<div class="card">
+    <div class="card-header">PDF & Dokument</div>
+    <div class="d-flex gap-10 flex-wrap">
+        <form method="POST" action="{{ url_for('invoicing.invoice_generate_pdf', id=invoice.id) }}">
+            <button type="submit" class="btn btn-primary">
+                {{ '📄 PDF neu generieren' if invoice.document_filename else '📄 PDF generieren' }}
+            </button>
+        </form>
+        {% if invoice.document_filename %}
+        <a href="{{ url_for('invoicing.invoice_download', id=invoice.id) }}" class="btn btn-outline">⬇ PDF herunterladen</a>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Status & Payment -->
+<div class="card">
+    <div class="card-header">Status & Zahlung</div>
+
+    {% if invoice.status != 'paid' and invoice.status != 'cancelled' %}
+    <div class="d-flex gap-10 flex-wrap mb-16">
+        {% for s, label in [('draft', 'Entwurf'), ('sent', 'Versendet'), ('cancelled', 'Storniert')] %}
+        {% if s != invoice.status %}
+        <form method="POST" action="{{ url_for('invoicing.invoice_set_status', id=invoice.id) }}">
+            <input type="hidden" name="status" value="{{ s }}">
+            <button type="submit" class="btn btn-sm btn-outline"
+                    {% if s == 'cancelled' %}onclick="return confirm('Rechnung wirklich stornieren?')"{% endif %}>
+                → {{ label }}
+            </button>
+        </form>
+        {% endif %}
+        {% endfor %}
+    </div>
+
+    <hr class="section-divider">
+    <div class="card-header">Als bezahlt markieren</div>
+    <p class="text-muted text-sm mb-8">Erstellt eine Einnahme-Buchung in der Buchhaltung mit der Rechnung als Beleg.</p>
+    <form method="POST" action="{{ url_for('invoicing.invoice_mark_paid', id=invoice.id) }}"
+          onsubmit="return confirm('Rechnung als bezahlt markieren und Buchung erstellen?')">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="payment_date">Zahlungsdatum</label>
+                <input type="date" id="payment_date" name="payment_date"
+                       value="{{ invoice.due_date.isoformat() if invoice.due_date else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="account_id">Konto *</label>
+                <select id="account_id" name="account_id" required>
+                    <option value="">— Konto wählen —</option>
+                    {% for acc in accounts %}
+                    <option value="{{ acc.id }}">{{ acc.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="category_id">Kategorie</label>
+                <select id="category_id" name="category_id">
+                    <option value="">— Keine —</option>
+                    {% for cat in income_categories %}
+                    <option value="{{ cat.id }}">{{ cat.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">✓ Als bezahlt markieren ({{ invoice.total|currency }})</button>
+    </form>
+
+    {% elif invoice.status == 'paid' %}
+    <div class="alert alert-success">
+        ✓ Diese Rechnung wurde als bezahlt markiert.
+    </div>
+    {% if invoice.linked_transaction %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Verknüpfte Buchung</div>
+            <div>{{ invoice.linked_transaction.description }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Konto</div>
+            <div>{{ invoice.linked_transaction.account.name if invoice.linked_transaction.account else '–' }}</div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Datum</div>
+            <div>{{ invoice.linked_transaction.date|date_format }}</div>
+        </div>
+    </div>
+    {% endif %}
+    <div class="mt-16">
+        <form method="POST" action="{{ url_for('invoicing.invoice_unmark_paid', id=invoice.id) }}"
+              onsubmit="return confirm('Zahlung rückgängig machen? Die verknüpfte Buchung wird gelöscht.')">
+            <button type="submit" class="btn btn-sm btn-outline text-danger">Zahlung rückgängig machen</button>
+        </form>
+    </div>
+
+    {% elif invoice.status == 'cancelled' %}
+    <div class="alert alert-danger">
+        Diese Rechnung wurde storniert.
+    </div>
+    <form method="POST" action="{{ url_for('invoicing.invoice_set_status', id=invoice.id) }}">
+        <input type="hidden" name="status" value="draft">
+        <button type="submit" class="btn btn-sm btn-outline">→ Wieder als Entwurf</button>
+    </form>
+    {% endif %}
+</div>
+
+<!-- Delete -->
+<div class="card">
+    <div class="card-header text-danger">Gefahrenzone</div>
+    <p class="text-muted text-sm mb-16">Das Löschen einer Rechnung kann nicht rückgängig gemacht werden.</p>
+    <form method="POST" action="{{ url_for('invoicing.invoice_delete', id=invoice.id) }}"
+          onsubmit="return confirm('Rechnung wirklich unwiderruflich löschen?')">
+        <button type="submit" class="btn btn-danger">Rechnung löschen</button>
+    </form>
+</div>
+{% endblock %}

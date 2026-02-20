@@ -153,6 +153,19 @@
             </div>
             {% endif %}
             {% endif %}
+            {% if transaction and transaction.linked_asset_id %}
+            {% set asset_docs = get_documents('asset', transaction.linked_asset_id) %}
+            {% if asset_docs %}
+            <div class="mt-6">
+                <div class="text-sm text-muted mb-4">Dokumente vom Anlagegut:</div>
+                {% for doc in asset_docs %}
+                <div class="mb-4">
+                    <a href="{{ url_for('admin.uploaded_file', filename=doc.filename) }}" target="_blank" class="text-accent text-sm">📄 {{ doc.original_filename or doc.filename }}</a>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endif %}
         </div>
 
         <hr class="section-divider">

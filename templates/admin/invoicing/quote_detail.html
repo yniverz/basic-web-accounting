@@ -1,0 +1,209 @@
+{% extends "admin/base.html" %}
+{% block title %}Angebot {{ quote.quote_number }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Angebot {{ quote.quote_number }}</h1>
+    <div class="d-flex gap-10">
+        {% if quote.status != 'invoiced' %}
+        <a href="{{ url_for('invoicing.quote_edit', id=quote.id) }}" class="btn btn-outline">Bearbeiten</a>
+        {% endif %}
+        <a href="{{ url_for('invoicing.quotes') }}" class="btn btn-outline">← Zurück</a>
+    </div>
+</div>
+
+<!-- Status + Summary -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value text-sm" style="font-size: 1.1em;">
+            {% if quote.status == 'draft' %}
+            <span class="badge badge-muted">Entwurf</span>
+            {% elif quote.status == 'sent' %}
+            <span class="badge badge-info">Versendet</span>
+            {% elif quote.status == 'accepted' %}
+            <span class="badge badge-success">Angenommen</span>
+            {% elif quote.status == 'rejected' %}
+            <span class="badge badge-danger">Abgelehnt</span>
+            {% elif quote.status == 'invoiced' %}
+            <span class="badge badge-warning">Rechnung erstellt</span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Gesamtbetrag</div>
+        <div class="stat-value">{{ quote.total|currency }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Datum</div>
+        <div class="stat-value text-sm" style="font-size: 1.1em;">{{ quote.date|date_format }}</div>
+    </div>
+</div>
+
+<!-- Customer & Meta -->
+<div class="card">
+    <div class="card-header">Details</div>
+    <div class="form-row">
+        <div>
+            <div class="text-muted text-sm mb-4">Kunde</div>
+            <div class="font-semibold">{{ quote.customer.display_name if quote.customer else '– Kein Kunde –' }}</div>
+            {% if quote.customer and quote.customer.address %}
+            <div class="text-sm text-muted mt-4" style="white-space: pre-line;">{{ quote.customer.address }}</div>
+            {% endif %}
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Gültig bis</div>
+            <div>{{ quote.valid_until|date_format if quote.valid_until else '–' }}</div>
+        </div>
+    </div>
+    {% if settings.tax_mode == 'regular' %}
+    <div class="form-row mt-16">
+        <div>
+            <div class="text-muted text-sm mb-4">Steuerbehandlung</div>
+            <div>{{ tax_treatment_labels.get(quote.tax_treatment, quote.tax_treatment) }}
+                {% if quote.tax_rate %} ({{ quote.tax_rate }}%){% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="text-muted text-sm mb-4">Zahlungsziel</div>
+            <div>{{ quote.payment_terms_days or 14 }} Tage</div>
+        </div>
+    </div>
+    {% endif %}
+    {% if quote.linked_asset %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Verknüpftes Anlagegut</div>
+        <div><a href="{{ url_for('admin.asset_detail', id=quote.linked_asset.id) }}" class="text-accent">{{ quote.linked_asset.name }}</a></div>
+    </div>
+    {% endif %}
+    {% if quote.notes %}
+    <div class="mt-16">
+        <div class="text-muted text-sm mb-4">Bemerkungen</div>
+        <div style="white-space: pre-line;">{{ quote.notes }}</div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Positions -->
+<div class="card">
+    <div class="card-header">Positionen</div>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 40px;">Pos</th>
+                    <th>Bezeichnung</th>
+                    <th style="text-align: right;">Menge</th>
+                    <th>Einheit</th>
+                    <th style="text-align: right;">Einzelpreis</th>
+                    <th style="text-align: right;">Gesamt</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in quote.items %}
+                <tr>
+                    <td>{{ item.position }}</td>
+                    <td>{{ item.description }}</td>
+                    <td style="text-align: right;">{{ item.quantity }}</td>
+                    <td>{{ item.unit }}</td>
+                    <td style="text-align: right;">{{ item.unit_price|currency }}</td>
+                    <td style="text-align: right;">{{ item.total|currency }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="price-summary mt-16">
+        {% if quote.discount_percent and quote.discount_percent > 0 %}
+        <div class="price-row">
+            <span>Zwischensumme</span>
+            <span>{{ quote.subtotal|currency }}</span>
+        </div>
+        <div class="price-row">
+            <span>Rabatt ({{ quote.discount_percent }}%)</span>
+            <span>– {{ quote.discount_amount|currency }}</span>
+        </div>
+        {% endif %}
+        <div class="price-row total">
+            <span>Gesamtbetrag</span>
+            <span>{{ quote.total|currency }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- PDF & Actions -->
+<div class="card">
+    <div class="card-header">PDF & Aktionen</div>
+    <div class="d-flex gap-10 flex-wrap">
+        <form method="POST" action="{{ url_for('invoicing.quote_generate_pdf', id=quote.id) }}">
+            <button type="submit" class="btn btn-primary">
+                {{ '📄 PDF neu generieren' if quote.document_filename else '📄 PDF generieren' }}
+            </button>
+        </form>
+        {% if quote.document_filename %}
+        <a href="{{ url_for('invoicing.quote_download', id=quote.id) }}" class="btn btn-outline">⬇ PDF herunterladen</a>
+        {% endif %}
+    </div>
+
+    {% if quote.status != 'invoiced' %}
+    <hr class="section-divider">
+    <div class="card-header">Status ändern</div>
+    <div class="d-flex gap-10 flex-wrap">
+        {% for s, label in [('draft', 'Entwurf'), ('sent', 'Versendet'), ('accepted', 'Angenommen'), ('rejected', 'Abgelehnt')] %}
+        {% if s != quote.status %}
+        <form method="POST" action="{{ url_for('invoicing.quote_set_status', id=quote.id) }}">
+            <input type="hidden" name="status" value="{{ s }}">
+            <button type="submit" class="btn btn-sm btn-outline">→ {{ label }}</button>
+        </form>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if quote.status in ('accepted', 'sent', 'draft') %}
+    <hr class="section-divider">
+    <div class="card-header">Rechnung erstellen</div>
+    <p class="text-muted text-sm mb-8">Erstellt eine Rechnung mit allen Positionen aus diesem Angebot.</p>
+    <form method="POST" action="{{ url_for('invoicing.quote_create_invoice', id=quote.id) }}"
+          onsubmit="return confirm('Rechnung aus diesem Angebot erstellen?')">
+        <button type="submit" class="btn btn-primary">📋 Rechnung erstellen</button>
+    </form>
+    {% endif %}
+
+    {% if quote.status == 'invoiced' %}
+    <hr class="section-divider">
+    <div class="card-header">Verknüpfte Rechnungen</div>
+    {% set linked_invoices = quote.invoices.all() %}
+    {% if linked_invoices %}
+    <ul style="list-style: none; padding: 0;">
+        {% for inv in linked_invoices %}
+        <li class="mb-4">
+            <a href="{{ url_for('invoicing.invoice_detail', id=inv.id) }}" class="text-accent font-semibold">
+                {{ inv.invoice_number }}
+            </a>
+            – {{ inv.date|date_format }}
+            – {{ inv.total|currency }}
+            {% if inv.status == 'paid' %}
+            <span class="badge badge-success">Bezahlt</span>
+            {% elif inv.status == 'cancelled' %}
+            <span class="badge badge-danger">Storniert</span>
+            {% else %}
+            <span class="badge badge-info">{{ inv.status }}</span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+</div>
+
+<!-- Delete -->
+<div class="card">
+    <div class="card-header text-danger">Gefahrenzone</div>
+    <p class="text-muted text-sm mb-16">Das Löschen eines Angebots kann nicht rückgängig gemacht werden.</p>
+    <form method="POST" action="{{ url_for('invoicing.quote_delete', id=quote.id) }}"
+          onsubmit="return confirm('Angebot wirklich unwiderruflich löschen?')">
+        <button type="submit" class="btn btn-danger">Angebot löschen</button>
+    </form>
+</div>
+{% endblock %}

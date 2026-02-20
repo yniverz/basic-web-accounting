@@ -44,6 +44,15 @@
                     </div>
                 </div>
 
+                <div class="nav-dropdown">
+                    <a class="nav-dropdown-toggle {{ 'active' if request.endpoint and request.endpoint.startswith('invoicing.') }}">Faktura</a>
+                    <div class="nav-dropdown-menu">
+                        <a href="{{ url_for('invoicing.customers') }}" class="{{ 'active' if request.endpoint and 'customer' in request.endpoint }}">Kunden</a>
+                        <a href="{{ url_for('invoicing.quotes') }}" class="{{ 'active' if request.endpoint and 'quote' in request.endpoint }}">Angebote</a>
+                        <a href="{{ url_for('invoicing.invoices') }}" class="{{ 'active' if request.endpoint and 'invoice' in request.endpoint }}">Rechnungen</a>
+                    </div>
+                </div>
+
                 <a href="{{ url_for('ai_chat.chat_page') }}" class="{{ 'active' if request.endpoint and 'ai_chat' in request.endpoint }}">KI-Assistent</a>
 
                 {% if current_user.is_admin %}

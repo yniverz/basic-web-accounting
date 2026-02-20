@@ -19,7 +19,7 @@ from helpers import (
     calculate_tax, get_tax_rate_for_treatment, parse_date,
     TAX_TREATMENT_LABELS,
 )
-from models import Account, Category, Document, SiteSettings, Transaction, db
+from models import Account, Category, Customer, Document, SiteSettings, Transaction, db
 from audit import archive_file
 
 api_bp = Blueprint('api', __name__)
@@ -123,6 +123,22 @@ def _account_to_dict(a):
     }
 
 
+def _customer_to_dict(c):
+    """Serialize a Customer to a dict."""
+    return {
+        'id': c.id,
+        'name': c.name,
+        'company': c.company,
+        'address': c.address,
+        'email': c.email,
+        'phone': c.phone,
+        'notes': c.notes,
+        'display_name': c.display_name,
+        'created_at': c.created_at.isoformat() if c.created_at else None,
+        'updated_at': c.updated_at.isoformat() if c.updated_at else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Settings (read-only)
 # ---------------------------------------------------------------------------
@@ -156,6 +172,119 @@ def list_tax_treatments():
             for k, v in TAX_TREATMENT_LABELS.items()
         ]
     })
+
+
+# ---------------------------------------------------------------------------
+# Customers
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/customers', methods=['GET'])
+@require_api_key
+def list_customers():
+    """
+    List customers.   Optional query param: q (search name/company/email).
+    """
+    q = request.args.get('q', '').strip()
+    query = Customer.query
+    if q:
+        pattern = f'%{q}%'
+        query = query.filter(
+            db.or_(
+                Customer.name.ilike(pattern),
+                Customer.company.ilike(pattern),
+                Customer.email.ilike(pattern),
+            )
+        )
+    customers = query.order_by(Customer.name).all()
+    return jsonify({'customers': [_customer_to_dict(c) for c in customers]})
+
+
+@api_bp.route('/customers', methods=['POST'])
+@require_api_key
+def create_customer():
+    """
+    Create a new customer.
+    Body: { name (required), company?, address?, email?, phone?, notes? }
+    """
+    data = request.get_json(force=True)
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+
+    c = Customer(
+        name=name,
+        company=data.get('company', '').strip() or None,
+        address=data.get('address', '').strip() or None,
+        email=data.get('email', '').strip() or None,
+        phone=data.get('phone', '').strip() or None,
+        notes=data.get('notes', '').strip() or None,
+    )
+    db.session.add(c)
+    db.session.commit()
+    return jsonify({'customer': _customer_to_dict(c)}), 201
+
+
+@api_bp.route('/customers/<int:customer_id>', methods=['GET'])
+@require_api_key
+def get_customer(customer_id):
+    """Get a single customer by ID."""
+    c = Customer.query.get(customer_id)
+    if not c:
+        return jsonify({'error': f'Customer {customer_id} not found'}), 404
+    return jsonify({'customer': _customer_to_dict(c)})
+
+
+@api_bp.route('/customers/<int:customer_id>', methods=['PUT', 'PATCH'])
+@require_api_key
+def update_customer(customer_id):
+    """
+    Update a customer.
+    Body: { name?, company?, address?, email?, phone?, notes? }
+    """
+    c = Customer.query.get(customer_id)
+    if not c:
+        return jsonify({'error': f'Customer {customer_id} not found'}), 404
+
+    data = request.get_json(force=True)
+    if 'name' in data:
+        name = data['name'].strip()
+        if not name:
+            return jsonify({'error': 'name cannot be empty'}), 400
+        c.name = name
+    if 'company' in data:
+        c.company = data['company'].strip() or None
+    if 'address' in data:
+        c.address = data['address'].strip() or None
+    if 'email' in data:
+        c.email = data['email'].strip() or None
+    if 'phone' in data:
+        c.phone = data['phone'].strip() or None
+    if 'notes' in data:
+        c.notes = data['notes'].strip() or None
+
+    db.session.commit()
+    return jsonify({'customer': _customer_to_dict(c)})
+
+
+@api_bp.route('/customers/<int:customer_id>', methods=['DELETE'])
+@require_api_key
+def delete_customer(customer_id):
+    """Delete a customer. Fails if quotes or invoices reference it."""
+    c = Customer.query.get(customer_id)
+    if not c:
+        return jsonify({'error': f'Customer {customer_id} not found'}), 404
+
+    quote_count = c.quotes.count()
+    invoice_count = c.invoices.count()
+    if quote_count > 0 or invoice_count > 0:
+        return jsonify({
+            'error': f'Cannot delete customer with {quote_count} quote(s) and {invoice_count} invoice(s). '
+                     'Delete linked documents first.'
+        }), 409
+
+    db.session.delete(c)
+    db.session.commit()
+    return jsonify({'deleted': True, 'id': customer_id})
 
 
 # ---------------------------------------------------------------------------

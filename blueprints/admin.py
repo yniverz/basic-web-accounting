@@ -1835,6 +1835,30 @@ def settings():
                 archive_file(current_app.config['UPLOAD_FOLDER'], settings.favicon_filename)
                 settings.favicon_filename = None
 
+        # Logo upload (for PDFs)
+        logo_file = request.files.get('logo')
+        if logo_file and logo_file.filename:
+            fname = secure_filename(logo_file.filename)
+            fname = 'logo_' + fname
+            upload_dir = current_app.config['UPLOAD_FOLDER']
+            if settings.logo_filename:
+                archive_file(upload_dir, settings.logo_filename)
+            logo_file.save(os.path.join(upload_dir, fname))
+            settings.logo_filename = fname
+
+        # Remove logo
+        if request.form.get('remove_logo'):
+            if settings.logo_filename:
+                archive_file(current_app.config['UPLOAD_FOLDER'], settings.logo_filename)
+                settings.logo_filename = None
+
+        # Invoicing defaults
+        settings.default_agb_text = request.form.get('default_agb_text', '').strip() or None
+        pt_days = request.form.get('default_payment_terms_days', '14')
+        settings.default_payment_terms_days = int(pt_days) if pt_days else 14
+        settings.quote_number_prefix = request.form.get('quote_number_prefix', '').strip() or 'A'
+        settings.invoice_number_prefix = request.form.get('invoice_number_prefix', '').strip() or 'R'
+
         db.session.commit()
         flash('Einstellungen wurden gespeichert.', 'success')
         return redirect(url_for('admin.settings'))

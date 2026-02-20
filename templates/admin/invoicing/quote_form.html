@@ -1,0 +1,262 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ 'Angebot bearbeiten' if quote else 'Neues Angebot' }} - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ 'Angebot bearbeiten' if quote else 'Neues Angebot' }}</h1>
+    <a href="{{ url_for('invoicing.quotes') }}" class="btn btn-outline">← Zurück</a>
+</div>
+
+<div class="card">
+    <form method="POST" id="quoteForm">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="date">Datum *</label>
+                <input type="date" id="date" name="date"
+                       value="{{ quote.date.isoformat() if quote else today }}" required>
+            </div>
+            <div class="form-group">
+                <label for="valid_until">Gültig bis</label>
+                <input type="date" id="valid_until" name="valid_until"
+                       value="{{ quote.valid_until.isoformat() if quote and quote.valid_until else '' }}">
+            </div>
+            <div class="form-group">
+                <label for="customer_id">Kunde</label>
+                <select id="customer_id" name="customer_id">
+                    <option value="">— Kein Kunde —</option>
+                    {% for c in customers %}
+                    <option value="{{ c.id }}"
+                            {{ 'selected' if (quote and quote.customer_id == c.id) or (not quote and prefill_asset) }}>
+                        {{ c.display_name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        {% if settings.tax_mode == 'regular' %}
+        <div class="form-row">
+            <div class="form-group">
+                <label for="tax_treatment">Steuerbehandlung</label>
+                <select id="tax_treatment" name="tax_treatment" onchange="updateTaxDisplay()">
+                    {% for key, label in tax_treatment_labels.items() %}
+                    <option value="{{ key }}"
+                            data-rate="{% if key == 'standard' %}{{ settings.tax_rate }}{% elif key == 'reduced' %}{{ settings.tax_rate_reduced }}{% else %}0{% endif %}"
+                            {{ 'selected' if quote and quote.tax_treatment == key }}>
+                        {{ label }}{% if key == 'standard' %} ({{ settings.tax_rate }}%){% elif key == 'reduced' %} ({{ settings.tax_rate_reduced }}%){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" id="custom_rate_group" style="display: none;">
+                <label for="custom_tax_rate">Steuersatz (%)</label>
+                <input type="number" id="custom_tax_rate" name="custom_tax_rate" step="0.1" min="0" max="100"
+                       value="{{ quote.tax_rate if quote and quote.tax_treatment == 'custom' else '' }}"
+                       placeholder="z.B. 5.0">
+            </div>
+        </div>
+        {% else %}
+        <input type="hidden" name="tax_treatment" value="none">
+        {% endif %}
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="discount_percent">Rabatt (%)</label>
+                <input type="number" id="discount_percent" name="discount_percent" step="0.1" min="0" max="100"
+                       value="{{ quote.discount_percent if quote and quote.discount_percent else '' }}"
+                       placeholder="0">
+            </div>
+            <div class="form-group">
+                <label for="payment_terms_days">Zahlungsziel (Tage)</label>
+                <input type="number" id="payment_terms_days" name="payment_terms_days" min="0"
+                       value="{{ quote.payment_terms_days if quote else (settings.default_payment_terms_days or 14) }}">
+            </div>
+        </div>
+
+        {% if prefill_asset %}
+        <input type="hidden" name="linked_asset_id" value="{{ prefill_asset.id }}">
+        <div class="alert alert-info">
+            ℹ Dieses Angebot wird mit dem Anlagegut <strong>{{ prefill_asset.name }}</strong> verknüpft.
+        </div>
+        {% endif %}
+
+        <hr class="section-divider">
+
+        <!-- Line Items -->
+        <div class="card-header">Positionen</div>
+        <div id="items-container">
+            {% if quote and quote.items %}
+                {% for item in quote.items %}
+                <div class="item-row form-row" style="align-items: end;">
+                    <div class="form-group" style="flex: 3;">
+                        {% if loop.first %}<label>Bezeichnung</label>{% endif %}
+                        <input type="text" name="item_description[]" value="{{ item.description }}" required placeholder="Beschreibung">
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        {% if loop.first %}<label>Menge</label>{% endif %}
+                        <input type="number" name="item_quantity[]" value="{{ item.quantity }}" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        {% if loop.first %}<label>Einheit</label>{% endif %}
+                        <input type="text" name="item_unit[]" value="{{ item.unit }}" placeholder="Stk.">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        {% if loop.first %}<label>Einzelpreis (€)</label>{% endif %}
+                        <input type="number" name="item_price[]" value="{{ item.unit_price }}" step="0.01" min="0" required
+                               oninput="recalcTotal()">
+                    </div>
+                    <div style="flex: 0 0 auto; padding-bottom: 8px;">
+                        <button type="button" class="btn btn-sm btn-outline text-danger" onclick="removeItem(this)">✕</button>
+                    </div>
+                </div>
+                {% endfor %}
+            {% elif prefill_asset %}
+                <div class="item-row form-row" style="align-items: end;">
+                    <div class="form-group" style="flex: 3;">
+                        <label>Bezeichnung</label>
+                        <input type="text" name="item_description[]" value="{{ prefill_asset.name }}" required placeholder="Beschreibung">
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        <label>Menge</label>
+                        <input type="number" name="item_quantity[]" value="1" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        <label>Einheit</label>
+                        <input type="text" name="item_unit[]" value="Stk." placeholder="Stk.">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Einzelpreis (€)</label>
+                        <input type="number" name="item_price[]" value="{{ prefill_asset.purchase_price_gross }}" step="0.01" min="0" required
+                               oninput="recalcTotal()">
+                    </div>
+                    <div style="flex: 0 0 auto; padding-bottom: 8px;">
+                        <button type="button" class="btn btn-sm btn-outline text-danger" onclick="removeItem(this)">✕</button>
+                    </div>
+                </div>
+            {% else %}
+                <div class="item-row form-row" style="align-items: end;">
+                    <div class="form-group" style="flex: 3;">
+                        <label>Bezeichnung</label>
+                        <input type="text" name="item_description[]" value="" required placeholder="Beschreibung">
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        <label>Menge</label>
+                        <input type="number" name="item_quantity[]" value="1" step="0.01" min="0.01" required>
+                    </div>
+                    <div class="form-group" style="flex: 0.5;">
+                        <label>Einheit</label>
+                        <input type="text" name="item_unit[]" value="Stk." placeholder="Stk.">
+                    </div>
+                    <div class="form-group" style="flex: 1;">
+                        <label>Einzelpreis (€)</label>
+                        <input type="number" name="item_price[]" value="" step="0.01" min="0" required
+                               oninput="recalcTotal()">
+                    </div>
+                    <div style="flex: 0 0 auto; padding-bottom: 8px;">
+                        <button type="button" class="btn btn-sm btn-outline text-danger" onclick="removeItem(this)">✕</button>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+        <button type="button" class="btn btn-sm btn-outline mt-8" onclick="addItem()">+ Position hinzufügen</button>
+
+        <!-- Running total -->
+        <div class="price-summary mt-16" id="totalDisplay">
+            <div class="price-row total">
+                <span>Gesamtbetrag (Brutto)</span>
+                <span id="totalValue">0,00 €</span>
+            </div>
+        </div>
+
+        <hr class="section-divider">
+
+        <div class="form-group">
+            <label for="notes">Bemerkungen</label>
+            <textarea id="notes" name="notes" rows="3"
+                      placeholder="Optionale Bemerkungen für das Angebot">{{ quote.notes if quote else '' }}</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="agb_text">AGB (erscheint als Anlage im PDF)</label>
+            <textarea id="agb_text" name="agb_text" rows="6"
+                      placeholder="Allgemeine Geschäftsbedingungen (Markdown: # Überschrift, **fett**)">{{ quote.agb_text if quote else default_agb }}</textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary">{{ 'Speichern' if quote else 'Angebot erstellen' }}</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function addItem() {
+    var container = document.getElementById('items-container');
+    var row = document.createElement('div');
+    row.className = 'item-row form-row';
+    row.style.alignItems = 'end';
+    row.innerHTML = `
+        <div class="form-group" style="flex: 3;">
+            <input type="text" name="item_description[]" value="" required placeholder="Beschreibung">
+        </div>
+        <div class="form-group" style="flex: 0.5;">
+            <input type="number" name="item_quantity[]" value="1" step="0.01" min="0.01" required>
+        </div>
+        <div class="form-group" style="flex: 0.5;">
+            <input type="text" name="item_unit[]" value="Stk." placeholder="Stk.">
+        </div>
+        <div class="form-group" style="flex: 1;">
+            <input type="number" name="item_price[]" value="" step="0.01" min="0" required oninput="recalcTotal()">
+        </div>
+        <div style="flex: 0 0 auto; padding-bottom: 8px;">
+            <button type="button" class="btn btn-sm btn-outline text-danger" onclick="removeItem(this)">✕</button>
+        </div>
+    `;
+    container.appendChild(row);
+}
+
+function removeItem(btn) {
+    var rows = document.querySelectorAll('.item-row');
+    if (rows.length > 1) {
+        btn.closest('.item-row').remove();
+        recalcTotal();
+    }
+}
+
+function recalcTotal() {
+    var quantities = document.querySelectorAll('input[name="item_quantity[]"]');
+    var prices = document.querySelectorAll('input[name="item_price[]"]');
+    var subtotal = 0;
+    for (var i = 0; i < prices.length; i++) {
+        var qty = parseFloat(quantities[i]?.value) || 0;
+        var price = parseFloat(prices[i]?.value) || 0;
+        subtotal += qty * price;
+    }
+    var discount = parseFloat(document.getElementById('discount_percent')?.value) || 0;
+    var total = subtotal * (1 - discount / 100);
+    document.getElementById('totalValue').textContent = total.toLocaleString('de-DE', {
+        minimumFractionDigits: 2, maximumFractionDigits: 2
+    }) + ' €';
+}
+
+function updateTaxDisplay() {
+    var sel = document.getElementById('tax_treatment');
+    if (!sel) return;
+    var customGroup = document.getElementById('custom_rate_group');
+    if (customGroup) {
+        customGroup.style.display = sel.value === 'custom' ? '' : 'none';
+    }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+    recalcTotal();
+    updateTaxDisplay();
+    // Recalc on quantity change too
+    document.querySelectorAll('input[name="item_quantity[]"]').forEach(function(el) {
+        el.addEventListener('input', recalcTotal);
+    });
+    var discountEl = document.getElementById('discount_percent');
+    if (discountEl) discountEl.addEventListener('input', recalcTotal);
+});
+</script>
+{% endblock %}

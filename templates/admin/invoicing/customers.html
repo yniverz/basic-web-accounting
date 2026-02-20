@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}Kunden - {{ site_settings.business_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Kunden</h1>
+    <a href="{{ url_for('invoicing.customer_new') }}" class="btn btn-primary">+ Neuer Kunde</a>
+</div>
+
+{% if customers %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Firma</th>
+                    <th>E-Mail</th>
+                    <th>Telefon</th>
+                    <th>Angebote</th>
+                    <th>Rechnungen</th>
+                    <th>Aktionen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in customers %}
+                <tr>
+                    <td class="font-semibold">{{ c.name }}</td>
+                    <td>{{ c.company or '–' }}</td>
+                    <td>{{ c.email or '–' }}</td>
+                    <td>{{ c.phone or '–' }}</td>
+                    <td>{{ c.quotes.count() }}</td>
+                    <td>{{ c.invoices.count() }}</td>
+                    <td>
+                        <div class="d-flex gap-6">
+                            <a href="{{ url_for('invoicing.customer_edit', id=c.id) }}" class="btn btn-sm btn-outline">Bearbeiten</a>
+                            <form method="POST" action="{{ url_for('invoicing.customer_delete', id=c.id) }}"
+                                  onsubmit="return confirm('Kunde wirklich löschen?')">
+                                <button type="submit" class="btn btn-sm btn-outline text-danger">Löschen</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <p>Noch keine Kunden angelegt.</p>
+        <a href="{{ url_for('invoicing.customer_new') }}" class="btn btn-primary">+ Ersten Kunden anlegen</a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

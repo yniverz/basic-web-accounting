@@ -2,7 +2,7 @@ import os
 import hashlib
 from flask import Flask, send_file, request
 from flask_login import LoginManager
-from models import db, User, SiteSettings, Account, Document, AuditLog
+from models import db, User, SiteSettings, Account, Document, AuditLog, Customer, Quote, QuoteItem, Invoice, InvoiceItem
 from werkzeug.security import generate_password_hash
 from helpers import format_currency, format_date
 from audit import init_audit
@@ -151,9 +151,11 @@ def create_app():
     from blueprints.admin import admin_bp
     from blueprints.ai_chat import ai_bp
     from blueprints.api import api_bp
+    from blueprints.invoicing import invoicing_bp
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(ai_bp, url_prefix='/admin')
+    app.register_blueprint(invoicing_bp, url_prefix='/admin/invoicing')
     app.register_blueprint(api_bp, url_prefix='/api/v1')
 
     # Redirect root to admin (no public pages in this app)
@@ -203,6 +205,11 @@ def _migrate_schema(db):
         ('transactions', 'account_id', 'INTEGER'),
         ('transactions', 'transfer_to_account_id', 'INTEGER'),
         ('transactions', 'linked_asset_id', 'INTEGER'),
+        ('site_settings', 'logo_filename', 'VARCHAR(200)'),
+        ('site_settings', 'default_agb_text', 'TEXT'),
+        ('site_settings', 'default_payment_terms_days', 'INTEGER DEFAULT 14'),
+        ('site_settings', 'quote_number_prefix', "VARCHAR(20) DEFAULT 'A'"),
+        ('site_settings', 'invoice_number_prefix', "VARCHAR(20) DEFAULT 'R'"),
     ]
 
     for table, column, col_type in migrations:
@@ -278,6 +285,97 @@ def _migrate_schema(db):
     # Migrate legacy document_filename from transactions and assets into documents table
     _migrate_legacy_documents(cursor, conn, 'transactions', 'transaction')
     _migrate_legacy_documents(cursor, conn, 'assets', 'asset')
+
+    # Ensure customers table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(200) NOT NULL,
+            company VARCHAR(200),
+            address TEXT,
+            email VARCHAR(200),
+            phone VARCHAR(100),
+            notes TEXT,
+            created_at DATETIME,
+            updated_at DATETIME
+        )
+    """)
+    conn.commit()
+
+    # Ensure quotes table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quote_number VARCHAR(50) UNIQUE NOT NULL,
+            customer_id INTEGER REFERENCES customers(id),
+            date DATE NOT NULL,
+            valid_until DATE,
+            status VARCHAR(20) DEFAULT 'draft',
+            tax_treatment VARCHAR(30) DEFAULT 'standard',
+            tax_rate REAL,
+            discount_percent REAL DEFAULT 0,
+            notes TEXT,
+            agb_text TEXT,
+            payment_terms_days INTEGER DEFAULT 14,
+            linked_asset_id INTEGER REFERENCES assets(id),
+            document_filename VARCHAR(300),
+            created_at DATETIME,
+            updated_at DATETIME
+        )
+    """)
+    conn.commit()
+
+    # Ensure quote_items table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS quote_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quote_id INTEGER NOT NULL REFERENCES quotes(id),
+            position INTEGER NOT NULL,
+            description VARCHAR(500) NOT NULL,
+            quantity REAL DEFAULT 1,
+            unit VARCHAR(50) DEFAULT 'Stk.',
+            unit_price REAL NOT NULL
+        )
+    """)
+    conn.commit()
+
+    # Ensure invoices table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_number VARCHAR(50) UNIQUE NOT NULL,
+            quote_id INTEGER REFERENCES quotes(id),
+            customer_id INTEGER NOT NULL REFERENCES customers(id),
+            date DATE NOT NULL,
+            due_date DATE,
+            status VARCHAR(20) DEFAULT 'draft',
+            tax_treatment VARCHAR(30) DEFAULT 'standard',
+            tax_rate REAL,
+            discount_percent REAL DEFAULT 0,
+            notes TEXT,
+            payment_terms_days INTEGER DEFAULT 14,
+            linked_asset_id INTEGER REFERENCES assets(id),
+            linked_transaction_id INTEGER REFERENCES transactions(id),
+            document_filename VARCHAR(300),
+            created_at DATETIME,
+            updated_at DATETIME
+        )
+    """)
+    conn.commit()
+
+    # Ensure invoice_items table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invoice_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+            position INTEGER NOT NULL,
+            description VARCHAR(500) NOT NULL,
+            quantity REAL DEFAULT 1,
+            unit VARCHAR(50) DEFAULT 'Stk.',
+            unit_price REAL NOT NULL
+        )
+    """)
+    conn.commit()
 
     conn.close()
 
