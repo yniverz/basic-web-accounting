@@ -93,6 +93,141 @@ Returns all valid `tax_treatment` values with German labels.
 
 ---
 
+### Customers
+
+Customers (Kunden) are used for quotes and invoices. They can also be managed by external systems (e.g. a rental platform) via this API.
+
+#### `GET /customers`
+
+List all customers. Supports optional search.
+
+**Query Parameters:**
+
+| Param | Type | Description |
+|---|---|---|
+| `q` | string | Search filter – matches name, company, or email (case-insensitive, partial match) |
+
+**Response:**
+```json
+{
+  "customers": [
+    {
+      "id": 1,
+      "name": "Max Mustermann",
+      "company": "Musterfirma GmbH",
+      "address": "Musterstr. 1\n12345 Musterstadt",
+      "email": "max@example.com",
+      "phone": "+49 123 456789",
+      "notes": null,
+      "display_name": "Musterfirma GmbH (Max Mustermann)",
+      "created_at": "2026-01-15T10:30:00",
+      "updated_at": "2026-01-15T10:30:00"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /customers`
+
+Create a new customer.
+
+**Request Body:**
+```json
+{
+  "name": "Max Mustermann",
+  "company": "Musterfirma GmbH",
+  "address": "Musterstr. 1\n12345 Musterstadt",
+  "email": "max@example.com",
+  "phone": "+49 123 456789",
+  "notes": "VIP-Kunde"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | **yes** | Contact person name |
+| `company` | string | no | Company name |
+| `address` | string | no | Full address (newline-separated) |
+| `email` | string | no | Email address |
+| `phone` | string | no | Phone number |
+| `notes` | string | no | Internal notes |
+
+**Response:** `201 Created`
+```json
+{
+  "customer": { "id": 2, "name": "Max Mustermann", "..." : "..." }
+}
+```
+
+---
+
+#### `GET /customers/:id`
+
+Get a single customer by ID.
+
+**Response:**
+```json
+{
+  "customer": {
+    "id": 1,
+    "name": "Max Mustermann",
+    "company": "Musterfirma GmbH",
+    "address": "Musterstr. 1\n12345 Musterstadt",
+    "email": "max@example.com",
+    "phone": "+49 123 456789",
+    "notes": null,
+    "display_name": "Musterfirma GmbH (Max Mustermann)",
+    "created_at": "2026-01-15T10:30:00",
+    "updated_at": "2026-01-15T10:30:00"
+  }
+}
+```
+
+**Errors:** `404` if not found.
+
+---
+
+#### `PUT /customers/:id`
+
+Update a customer. Only provided fields are changed (partial update supported via PUT or PATCH).
+
+**Request Body:** (all fields optional)
+```json
+{
+  "name": "Updated Name",
+  "email": "new@example.com"
+}
+```
+
+**Response:**
+```json
+{
+  "customer": { "id": 1, "name": "Updated Name", "..." : "..." }
+}
+```
+
+**Errors:** `404` if not found, `400` if `name` is set to empty string.
+
+---
+
+#### `DELETE /customers/:id`
+
+Delete a customer. Fails if quotes or invoices reference it.
+
+**Response:**
+```json
+{
+  "deleted": true,
+  "id": 1
+}
+```
+
+**Errors:** `404` if not found, `409` if linked quotes/invoices exist.
+
+---
+
 ### Accounts
 
 Accounts (Konten) represent Bank, Bargeld, PayPal, etc. Every transaction must be assigned to an account. Account balances are computed from `initial_balance` plus all transaction movements.
