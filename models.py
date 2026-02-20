@@ -260,3 +260,35 @@ class Document(db.Model):
 
     def __repr__(self):
         return f'<Document {self.filename} ({self.entity_type}:{self.entity_id})>'
+
+
+class AuditLog(db.Model):
+    """
+    Immutable audit trail for all data changes (GoBD-compliant).
+
+    Each entry records who changed what, when, and stores before/after
+    snapshots as JSON.  Entries form a hash chain: each entry_hash is
+    computed from the previous hash + entry data, so tampering with any
+    row invalidates all subsequent hashes.
+    """
+    __tablename__ = 'audit_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    user_id = db.Column(db.Integer, nullable=True)          # NULL for system actions
+    username = db.Column(db.String(100), nullable=True)      # denormalised for archive safety
+    ip_address = db.Column(db.String(45), nullable=True)
+    source = db.Column(db.String(20), nullable=False, default='web')  # 'web', 'api', 'ai_chat', 'system'
+    action = db.Column(db.String(10), nullable=False)        # 'CREATE', 'UPDATE', 'DELETE'
+    entity_type = db.Column(db.String(50), nullable=False)   # e.g. 'Transaction', 'Asset'
+    entity_id = db.Column(db.Integer, nullable=True)
+    old_values = db.Column(db.Text, nullable=True)           # JSON snapshot before change
+    new_values = db.Column(db.Text, nullable=True)           # JSON snapshot after change
+    # File archival references (when documents are archived instead of deleted)
+    archived_files = db.Column(db.Text, nullable=True)       # JSON list of archived filenames
+    # Hash chain for tamper detection
+    previous_hash = db.Column(db.String(64), nullable=False, default='0' * 64)
+    entry_hash = db.Column(db.String(64), nullable=False)
+
+    def __repr__(self):
+        return f'<AuditLog {self.id} {self.action} {self.entity_type}:{self.entity_id}>'

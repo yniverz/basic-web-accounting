@@ -20,6 +20,7 @@ from helpers import (
     TAX_TREATMENT_LABELS,
 )
 from models import Account, Category, Document, SiteSettings, Transaction, db
+from audit import archive_file
 
 api_bp = Blueprint('api', __name__)
 
@@ -680,11 +681,9 @@ def delete_transaction(tx_id):
     if t.linked_asset_id:
         return jsonify({'error': 'Cannot delete a transaction linked to an asset. Manage it via the asset.'}), 409
 
-    # Remove all attached documents
+    # Archive all attached documents
     for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
-        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-        if os.path.exists(fp):
-            os.remove(fp)
+        archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
         db.session.delete(doc)
 
     db.session.delete(t)
@@ -789,8 +788,7 @@ def delete_transaction_document(tx_id, doc_id):
         return jsonify({'error': f'Document {doc_id} not found for this transaction.'}), 404
 
     fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-    if os.path.exists(fp):
-        os.remove(fp)
+    archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
 
     db.session.delete(doc)
     db.session.commit()

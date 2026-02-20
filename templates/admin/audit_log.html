@@ -1,0 +1,262 @@
+{% extends "admin/base.html" %}
+{% block title %}Änderungsprotokoll - {{ site_settings.business_name }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{{ url_for('serve_static', filename='css/audit.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Änderungsprotokoll</h1>
+    <div class="d-flex gap-6">
+        <form method="POST" action="{{ url_for('admin.audit_verify') }}">
+            <button type="submit" class="btn btn-outline" title="Hash-Kette der Einträge verifizieren">🔒 Integrität prüfen</button>
+        </form>
+    </div>
+</div>
+
+<!-- Integrity status -->
+{% if integrity is not none %}
+<div class="alert alert-{{ 'success' if integrity.valid else 'error' }}">
+    {{ integrity.message }}
+    {% if integrity.total > 0 %}
+    <span class="text-sm">({{ integrity.total }} Einträge geprüft)</span>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Filters -->
+<div class="filter-bar">
+    <form method="GET" class="d-flex gap-12 align-end flex-wrap w-full">
+        <div class="form-group">
+            <label for="entity_type">Entität</label>
+            <select name="entity_type" id="entity_type" style="width: auto;">
+                <option value="">Alle</option>
+                {% for et in entity_types %}
+                <option value="{{ et }}" {{ 'selected' if et == filters.entity_type }}>{{ et }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="action">Aktion</label>
+            <select name="action" id="action" style="width: auto;">
+                <option value="">Alle</option>
+                <option value="CREATE" {{ 'selected' if filters.action == 'CREATE' }}>Erstellt</option>
+                <option value="UPDATE" {{ 'selected' if filters.action == 'UPDATE' }}>Geändert</option>
+                <option value="DELETE" {{ 'selected' if filters.action == 'DELETE' }}>Gelöscht</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="source">Quelle</label>
+            <select name="source" id="source" style="width: auto;">
+                <option value="">Alle</option>
+                <option value="web" {{ 'selected' if filters.source == 'web' }}>Web-UI</option>
+                <option value="api" {{ 'selected' if filters.source == 'api' }}>API</option>
+                <option value="ai_chat" {{ 'selected' if filters.source == 'ai_chat' }}>KI-Chat</option>
+                <option value="system" {{ 'selected' if filters.source == 'system' }}>System</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="user">Benutzer</label>
+            <select name="user" id="user" style="width: auto;">
+                <option value="">Alle</option>
+                {% for u in users %}
+                <option value="{{ u.username }}" {{ 'selected' if u.username == filters.user }}>{{ u.display_name or u.username }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="date_from">Von</label>
+            <input type="date" name="date_from" id="date_from" value="{{ filters.date_from or '' }}" style="width: auto;">
+        </div>
+        <div class="form-group">
+            <label for="date_to">Bis</label>
+            <input type="date" name="date_to" id="date_to" value="{{ filters.date_to or '' }}" style="width: auto;">
+        </div>
+        <div class="form-group">
+            <label for="entity_id">Entity-ID</label>
+            <input type="number" name="entity_id" id="entity_id" value="{{ filters.entity_id or '' }}" style="width: 80px;" placeholder="#">
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn">Filtern</button>
+        </div>
+    </form>
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Einträge gesamt</div>
+        <div class="stat-value">{{ total_count }}</div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-label">Erstellt</div>
+        <div class="stat-value">{{ count_create }}</div>
+    </div>
+    <div class="stat-card" style="border-left-color: var(--color-accent);">
+        <div class="stat-label">Geändert</div>
+        <div class="stat-value">{{ count_update }}</div>
+    </div>
+    <div class="stat-card stat-danger">
+        <div class="stat-label">Gelöscht</div>
+        <div class="stat-value">{{ count_delete }}</div>
+    </div>
+</div>
+
+<!-- Audit log entries -->
+{% if entries %}
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Zeitpunkt</th>
+                    <th>Benutzer</th>
+                    <th>Quelle</th>
+                    <th>Aktion</th>
+                    <th>Entität</th>
+                    <th>ID</th>
+                    <th>Details</th>
+                    <th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in entries %}
+                <tr class="audit-row">
+                    <td class="text-muted text-sm">{{ entry.id }}</td>
+                    <td style="white-space: nowrap;">
+                        <span class="text-sm">{{ entry.timestamp.strftime('%d.%m.%Y') }}</span><br>
+                        <span class="text-muted text-sm">{{ entry.timestamp.strftime('%H:%M:%S') }}</span>
+                    </td>
+                    <td>
+                        {{ entry.username or '–' }}
+                        {% if entry.ip_address %}
+                        <br><span class="text-muted text-sm">{{ entry.ip_address }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if entry.source == 'web' %}
+                        <span class="badge">Web</span>
+                        {% elif entry.source == 'api' %}
+                        <span class="badge badge-info">API</span>
+                        {% elif entry.source == 'ai_chat' %}
+                        <span class="badge" style="background: var(--color-accent-light); color: var(--color-accent);">KI</span>
+                        {% else %}
+                        <span class="badge">System</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if entry.action == 'CREATE' %}
+                        <span class="badge badge-income">Erstellt</span>
+                        {% elif entry.action == 'UPDATE' %}
+                        <span class="badge" style="background: var(--color-accent-light); color: var(--color-accent);">Geändert</span>
+                        {% elif entry.action == 'DELETE' %}
+                        <span class="badge badge-expense">Gelöscht</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ entry.entity_type }}</td>
+                    <td>{{ entry.entity_id or '–' }}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline audit-detail-toggle" onclick="toggleDetail(this, {{ entry.id }})">
+                            Anzeigen
+                        </button>
+                    </td>
+                    <td>
+                        <span class="audit-hash text-muted text-sm" title="{{ entry.entry_hash }}">{{ entry.entry_hash[:8] }}…</span>
+                    </td>
+                </tr>
+                <tr class="audit-detail-row" id="detail-{{ entry.id }}" style="display: none;">
+                    <td colspan="9">
+                        <div class="audit-detail-content">
+                            {% if entry.action == 'UPDATE' %}
+                            <div class="audit-diff">
+                                <div class="audit-diff-side audit-diff-old">
+                                    <h4>Vorher</h4>
+                                    {% if entry.old_values %}
+                                    <pre>{{ entry.old_values | pretty_json }}</pre>
+                                    {% else %}
+                                    <p class="text-muted">–</p>
+                                    {% endif %}
+                                </div>
+                                <div class="audit-diff-side audit-diff-new">
+                                    <h4>Nachher</h4>
+                                    {% if entry.new_values %}
+                                    <pre>{{ entry.new_values | pretty_json }}</pre>
+                                    {% else %}
+                                    <p class="text-muted">–</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% elif entry.action == 'CREATE' %}
+                            <div class="audit-single">
+                                <h4>Neue Daten</h4>
+                                {% if entry.new_values %}
+                                <pre>{{ entry.new_values | pretty_json }}</pre>
+                                {% else %}
+                                <p class="text-muted">–</p>
+                                {% endif %}
+                            </div>
+                            {% elif entry.action == 'DELETE' %}
+                            <div class="audit-single audit-deleted">
+                                <h4>Gelöschte Daten</h4>
+                                {% if entry.old_values %}
+                                <pre>{{ entry.old_values | pretty_json }}</pre>
+                                {% else %}
+                                <p class="text-muted">–</p>
+                                {% endif %}
+                            </div>
+                            {% endif %}
+                            {% if entry.archived_files %}
+                            <div class="audit-archived-files">
+                                <h4>📁 Archivierte Dateien</h4>
+                                <pre>{{ entry.archived_files | pretty_json }}</pre>
+                            </div>
+                            {% endif %}
+                            <div class="audit-hash-detail text-muted text-sm">
+                                <strong>Entry-Hash:</strong> {{ entry.entry_hash }}<br>
+                                <strong>Vorheriger Hash:</strong> {{ entry.previous_hash }}
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}
+    <a href="{{ url_for('admin.audit_log', page=page-1, **filters) }}" class="btn btn-sm btn-outline">← Zurück</a>
+    {% endif %}
+    <span class="text-muted">Seite {{ page }} von {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="{{ url_for('admin.audit_log', page=page+1, **filters) }}" class="btn btn-sm btn-outline">Weiter →</a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card empty-state">
+    <p>Keine Protokolleinträge gefunden.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleDetail(btn, id) {
+    var row = document.getElementById('detail-' + id);
+    if (row.style.display === 'none') {
+        row.style.display = 'table-row';
+        btn.textContent = 'Verbergen';
+    } else {
+        row.style.display = 'none';
+        btn.textContent = 'Anzeigen';
+    }
+}
+</script>
+{% endblock %}

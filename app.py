@@ -2,9 +2,10 @@ import os
 import hashlib
 from flask import Flask, send_file, request
 from flask_login import LoginManager
-from models import db, User, SiteSettings, Account, Document
+from models import db, User, SiteSettings, Account, Document, AuditLog
 from werkzeug.security import generate_password_hash
 from helpers import format_currency, format_date
+from audit import init_audit
 
 # Load .env file if python-dotenv is available
 try:
@@ -44,6 +45,7 @@ def create_app():
     # Ensure instance and upload folders exist
     os.makedirs(app.instance_path, exist_ok=True)
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+    os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'archive'), exist_ok=True)
 
     # Initialize extensions
     db.init_app(app)
@@ -56,6 +58,9 @@ def create_app():
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))
+
+    # Initialize audit trail (must be before first commit)
+    init_audit(app, db)
 
     # Create tables and seed default data
     with app.app_context():
@@ -81,6 +86,18 @@ def create_app():
     # Template filters
     app.jinja_env.filters['currency'] = format_currency
     app.jinja_env.filters['date_format'] = format_date
+
+    def pretty_json_filter(value):
+        """Format a JSON string for display in the audit log."""
+        import json as _json
+        if not value:
+            return value
+        try:
+            obj = _json.loads(value) if isinstance(value, str) else value
+            return _json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return value
+    app.jinja_env.filters['pretty_json'] = pretty_json_filter
 
     # Template globals – helper to load documents for an entity
     def get_documents(entity_type, entity_id):
@@ -233,6 +250,27 @@ def _migrate_schema(db):
             entity_type VARCHAR(20) NOT NULL,
             entity_id INTEGER NOT NULL,
             created_at DATETIME
+        )
+    """)
+    conn.commit()
+
+    # Ensure audit_log table exists
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME NOT NULL,
+            user_id INTEGER,
+            username VARCHAR(100),
+            ip_address VARCHAR(45),
+            source VARCHAR(20) NOT NULL DEFAULT 'web',
+            action VARCHAR(10) NOT NULL,
+            entity_type VARCHAR(50) NOT NULL,
+            entity_id INTEGER,
+            old_values TEXT,
+            new_values TEXT,
+            archived_files TEXT,
+            previous_hash VARCHAR(64) NOT NULL,
+            entry_hash VARCHAR(64) NOT NULL
         )
     """)
     conn.commit()

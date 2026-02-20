@@ -3,8 +3,9 @@ from datetime import date, datetime
 from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app, send_from_directory
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account, Document
+from models import db, User, Transaction, Category, SiteSettings, Asset, DepreciationCategory, Account, Document, AuditLog
 from werkzeug.security import generate_password_hash
+from audit import archive_file, verify_integrity
 from helpers import parse_date, parse_amount, calculate_tax, calculate_tax_from_net, get_year_choices, get_month_names, format_currency, TAX_TREATMENT_LABELS, get_tax_rate_for_treatment
 from depreciation import (
     get_depreciation_schedule, get_depreciation_for_year, get_book_value,
@@ -256,9 +257,7 @@ def transaction_edit(id):
             for doc_id in remove_doc_ids:
                 doc = Document.query.get(int(doc_id))
                 if doc and doc.entity_type == 'transaction' and doc.entity_id == t.id:
-                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-                    if os.path.exists(fp):
-                        os.remove(fp)
+                    archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
                     db.session.delete(doc)
 
             # File uploads (multiple, appended)
@@ -296,11 +295,9 @@ def transaction_delete(id):
     if t.linked_asset_id:
         flash('Diese Buchung ist mit einem Anlagegut verknüpft und kann nicht direkt gelöscht werden.', 'error')
         return redirect(url_for('admin.transactions'))
-    # Remove all attached documents
+    # Archive all attached documents
     for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
-        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-        if os.path.exists(fp):
-            os.remove(fp)
+        archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
         db.session.delete(doc)
     db.session.delete(t)
     db.session.commit()
@@ -936,9 +933,7 @@ def asset_edit(id):
             for doc_id in remove_doc_ids:
                 doc = Document.query.get(int(doc_id))
                 if doc and doc.entity_type == 'asset' and doc.entity_id == asset.id:
-                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-                    if os.path.exists(fp):
-                        os.remove(fp)
+                    archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
                     db.session.delete(doc)
 
             # File uploads (multiple, appended)
@@ -1074,11 +1069,9 @@ def asset_delete(id):
     asset = Asset.query.get_or_404(id)
     # Delete linked transactions
     Transaction.query.filter_by(linked_asset_id=id).delete()
-    # Remove all attached documents
+    # Archive all attached documents
     for doc in Document.query.filter_by(entity_type='asset', entity_id=asset.id).all():
-        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-        if os.path.exists(fp):
-            os.remove(fp)
+        archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
         db.session.delete(doc)
     db.session.delete(asset)
     db.session.commit()
@@ -1538,11 +1531,9 @@ def bundle_edit(bundle_id):
                     for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
                         if doc.filename in filenames_to_remove:
                             db.session.delete(doc)
-                # Remove the actual files from disk
+                # Archive the actual files from disk
                 for fn in filenames_to_remove:
-                    fp = os.path.join(current_app.config['UPLOAD_FOLDER'], fn)
-                    if os.path.exists(fp):
-                        os.remove(fp)
+                    archive_file(current_app.config['UPLOAD_FOLDER'], fn)
 
             # File uploads (multiple, shared for all bundle items)
             uploaded_docs = []
@@ -1626,9 +1617,7 @@ def bundle_delete(bundle_id):
         Transaction.query.filter_by(linked_asset_id=a.id).delete()
         for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
             if doc.filename not in removed_files:
-                filepath = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-                if os.path.exists(filepath):
-                    os.remove(filepath)
+                archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
                 removed_files.add(doc.filename)
             db.session.delete(doc)
         db.session.delete(a)
@@ -1834,20 +1823,16 @@ def settings():
             fname = secure_filename(favicon_file.filename)
             fname = 'favicon_' + fname
             upload_dir = current_app.config['UPLOAD_FOLDER']
-            # Remove old favicon
+            # Archive old favicon
             if settings.favicon_filename:
-                old_path = os.path.join(upload_dir, settings.favicon_filename)
-                if os.path.exists(old_path):
-                    os.remove(old_path)
+                archive_file(upload_dir, settings.favicon_filename)
             favicon_file.save(os.path.join(upload_dir, fname))
             settings.favicon_filename = fname
 
         # Remove favicon
         if request.form.get('remove_favicon'):
             if settings.favicon_filename:
-                old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], settings.favicon_filename)
-                if os.path.exists(old_path):
-                    os.remove(old_path)
+                archive_file(current_app.config['UPLOAD_FOLDER'], settings.favicon_filename)
                 settings.favicon_filename = None
 
         db.session.commit()
@@ -1964,3 +1949,102 @@ def user_delete(id):
     db.session.commit()
     flash('Benutzer wurde gelöscht.', 'success')
     return redirect(url_for('admin.users'))
+
+
+# --- Audit Log ---
+
+@admin_bp.route('/audit')
+def audit_log():
+    """Display the full audit trail with filters and pagination."""
+    if not current_user.is_admin:
+        flash('Nur Administratoren können das Änderungsprotokoll einsehen.', 'error')
+        return redirect(url_for('admin.dashboard'))
+
+    page = request.args.get('page', 1, type=int)
+    per_page = 50
+
+    # Collect filter values
+    filters = {
+        'entity_type': request.args.get('entity_type', ''),
+        'action': request.args.get('action', ''),
+        'source': request.args.get('source', ''),
+        'user': request.args.get('user', ''),
+        'date_from': request.args.get('date_from', ''),
+        'date_to': request.args.get('date_to', ''),
+        'entity_id': request.args.get('entity_id', ''),
+    }
+
+    query = AuditLog.query
+
+    if filters['entity_type']:
+        query = query.filter_by(entity_type=filters['entity_type'])
+    if filters['action']:
+        query = query.filter_by(action=filters['action'])
+    if filters['source']:
+        query = query.filter_by(source=filters['source'])
+    if filters['user']:
+        query = query.filter_by(username=filters['user'])
+    if filters['entity_id']:
+        try:
+            query = query.filter_by(entity_id=int(filters['entity_id']))
+        except ValueError:
+            pass
+    if filters['date_from']:
+        try:
+            from datetime import datetime as dt
+            d = dt.strptime(filters['date_from'], '%Y-%m-%d')
+            query = query.filter(AuditLog.timestamp >= d)
+        except ValueError:
+            pass
+    if filters['date_to']:
+        try:
+            from datetime import datetime as dt
+            d = dt.strptime(filters['date_to'], '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+            query = query.filter(AuditLog.timestamp <= d)
+        except ValueError:
+            pass
+
+    total_count = query.count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    entries = query.order_by(AuditLog.id.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+    # Stats (on filtered set)
+    count_create = query.filter_by(action='CREATE').count()
+    count_update = query.filter_by(action='UPDATE').count()
+    count_delete = query.filter_by(action='DELETE').count()
+
+    # Distinct entity types for filter dropdown
+    entity_types = [r[0] for r in db.session.query(AuditLog.entity_type).distinct().order_by(AuditLog.entity_type).all()]
+
+    users = User.query.order_by(User.username).all()
+
+    # Check if integrity verification was requested (via session)
+    from flask import session as flask_session
+    integrity = flask_session.pop('audit_integrity', None)
+
+    return render_template('admin/audit_log.html',
+                           entries=entries, page=page, total_pages=total_pages,
+                           total_count=total_count, filters=filters,
+                           count_create=count_create, count_update=count_update,
+                           count_delete=count_delete, entity_types=entity_types,
+                           users=users, integrity=integrity)
+
+
+@admin_bp.route('/audit/verify', methods=['POST'])
+def audit_verify():
+    """Verify the hash chain integrity of the audit log."""
+    if not current_user.is_admin:
+        flash('Nur Administratoren können die Integrität prüfen.', 'error')
+        return redirect(url_for('admin.dashboard'))
+
+    is_valid, total, broken_id, message = verify_integrity(db)
+
+    from flask import session as flask_session
+    flask_session['audit_integrity'] = {
+        'valid': is_valid,
+        'total': total,
+        'broken_id': broken_id,
+        'message': message,
+    }
+    return redirect(url_for('admin.audit_log'))

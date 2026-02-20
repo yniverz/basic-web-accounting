@@ -28,6 +28,7 @@ from helpers import (
 from models import (
     Account, Asset, Category, ChatHistory, DepreciationCategory, Document, SiteSettings, Transaction, User, db,
 )
+from audit import archive_file
 from depreciation import (
     DEPRECIATION_METHODS, get_book_value, get_depreciation_for_year,
     get_depreciation_schedule, get_disposal_result,
@@ -878,12 +879,10 @@ def execute_tool(name, args):
             return {'error': f"Transaction {args['id']} not found"}
         if t.linked_asset_id:
             return {'error': 'Cannot delete a linked asset transaction. Delete the asset instead.'}
-        # Remove all attached documents
+        # Archive all attached documents
         for doc in Document.query.filter_by(entity_type='transaction', entity_id=t.id).all():
             from flask import current_app
-            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-            if os.path.exists(fp):
-                os.remove(fp)
+            archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
             db.session.delete(doc)
         db.session.delete(t)
         db.session.commit()
@@ -1105,9 +1104,7 @@ def execute_tool(name, args):
                 for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
                     if doc.filename not in removed_files:
                         from flask import current_app
-                        fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-                        if os.path.exists(fp):
-                            os.remove(fp)
+                        archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
                         removed_files.add(doc.filename)
                     db.session.delete(doc)
                 db.session.delete(a)
@@ -1121,12 +1118,10 @@ def execute_tool(name, args):
         if not a:
             return {'error': f"Asset {args['id']} not found"}
         Transaction.query.filter_by(linked_asset_id=a.id).delete()
-        # Remove all attached documents
+        # Archive all attached documents
         for doc in Document.query.filter_by(entity_type='asset', entity_id=a.id).all():
             from flask import current_app
-            fp = os.path.join(current_app.config['UPLOAD_FOLDER'], doc.filename)
-            if os.path.exists(fp):
-                os.remove(fp)
+            archive_file(current_app.config['UPLOAD_FOLDER'], doc.filename)
             db.session.delete(doc)
         db.session.delete(a)
         db.session.commit()
